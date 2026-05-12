@@ -16,3 +16,9 @@
 - 新增 `main.py`，基于 PySide6 + OpenCV 实现 Windows 11 桌面视频工具。
 - 新增 `requirements.txt`，记录运行所需依赖。
 - 新增 `README.md` 和 `run_windows.bat`，提供 Windows 启动方式。
+
+## v0.2 2026.05.12
+
+1. ROI 区域信息显示调整为 ROI 方框的 4 个点的像素坐标，不再显示中心位置、高 H 和宽 W。
+2. 在 ROI 按钮边上增加 `ROIpoly` 按钮。点击 `ROIpoly` 后，允许鼠标在视频区域依次选择 4 个点，并依次连接 4 个点形成 1 个凸四边形，作为 ROI 的 4 个角点信息。
+3. 点击“截屏”按钮时，把四边形 ROI 区域图像通过 OpenCV 透视矫正生成正矩形图片，并保存到所选目录。

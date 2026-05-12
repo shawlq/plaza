@@ -20,6 +20,7 @@ from PySide6.QtGui import (
     QKeySequence,
     QPainter,
     QPen,
+    QPolygonF,
     QShortcut,
 )
 from PySide6.QtWidgets import (
@@ -69,7 +70,7 @@ class SeekSlider(QSlider):
 class VideoCanvas(QWidget):
     """Video display widget with ROI drawing and selection support."""
 
-    roi_selected = Signal(QRect)
+    roi_points_selected = Signal(object)
     roi_selection_finished = Signal()
 
     def __init__(self) -> None:
@@ -80,11 +81,12 @@ class VideoCanvas(QWidget):
         self._image: Optional[QImage] = None
         self._video_size = QSize(0, 0)
         self._display_rect = QRectF()
-        self._roi: Optional[QRect] = None
-        self._selection_enabled = False
+        self._roi_points: list[tuple[int, int]] = []
+        self._selection_mode: Optional[str] = None
         self._dragging = False
         self._drag_start = QPointF()
         self._drag_end = QPointF()
+        self._poly_points_display: list[QPointF] = []
 
     def set_frame(self, frame_bgr: np.ndarray) -> None:
         rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
@@ -104,17 +106,18 @@ class VideoCanvas(QWidget):
     def clear(self) -> None:
         self._image = None
         self._video_size = QSize(0, 0)
-        self._roi = None
+        self._roi_points = []
         self._display_rect = QRectF()
         self.update()
 
-    def set_roi(self, roi: QRect) -> None:
-        self._roi = QRect(roi)
+    def set_roi_points(self, points: list[tuple[int, int]]) -> None:
+        self._roi_points = list(points)
         self.update()
 
-    def set_roi_selection_enabled(self, enabled: bool) -> None:
-        self._selection_enabled = enabled
+    def set_roi_selection_mode(self, mode: Optional[str]) -> None:
+        self._selection_mode = mode
         self._dragging = False
+        self._poly_points_display = []
         self.update()
 
     def paintEvent(self, event):  # noqa: N802 - Qt override
@@ -129,13 +132,25 @@ class VideoCanvas(QWidget):
 
         painter.drawImage(self._display_rect, self._image)
 
-        if self._roi is not None and not self._roi.isEmpty():
+        if len(self._roi_points) == 4:
             painter.setPen(QPen(Qt.green, 2))
-            painter.drawRect(self._original_to_display_rect(self._roi))
+            display_points = [self._original_to_display_point(point) for point in self._roi_points]
+            painter.drawPolygon(QPolygonF(display_points))
+            for index, point in enumerate(display_points, start=1):
+                painter.drawEllipse(point, 4, 4)
+                painter.drawText(point + QPointF(6, -6), f"P{index}")
 
         if self._dragging:
             painter.setPen(QPen(Qt.yellow, 2, Qt.DashLine))
             painter.drawRect(QRectF(self._drag_start, self._drag_end).normalized())
+
+        if self._selection_mode == "poly" and self._poly_points_display:
+            painter.setPen(QPen(Qt.yellow, 2, Qt.DashLine))
+            for index, point in enumerate(self._poly_points_display, start=1):
+                painter.drawEllipse(point, 5, 5)
+                painter.drawText(point + QPointF(6, -6), f"P{index}")
+                if index > 1:
+                    painter.drawLine(self._poly_points_display[index - 2], point)
 
     def resizeEvent(self, event):  # noqa: N802 - Qt override
         super().resizeEvent(event)
@@ -143,13 +158,30 @@ class VideoCanvas(QWidget):
 
     def mousePressEvent(self, event):  # noqa: N802 - Qt override
         if (
-            self._selection_enabled
+            self._selection_mode == "rect"
             and event.button() == Qt.LeftButton
             and self._display_rect.contains(event.position())
         ):
             self._dragging = True
             self._drag_start = self._clamp_to_display(event.position())
             self._drag_end = self._drag_start
+            self.update()
+            event.accept()
+            return
+        if (
+            self._selection_mode == "poly"
+            and event.button() == Qt.LeftButton
+            and self._display_rect.contains(event.position())
+        ):
+            self._poly_points_display.append(self._clamp_to_display(event.position()))
+            if len(self._poly_points_display) == 4:
+                points = [
+                    self._display_to_original_point(point)
+                    for point in self._poly_points_display
+                ]
+                self.roi_points_selected.emit(points)
+                self.roi_selection_finished.emit()
+                self._poly_points_display = []
             self.update()
             event.accept()
             return
@@ -171,7 +203,7 @@ class VideoCanvas(QWidget):
                 QRectF(self._drag_start, self._drag_end).normalized()
             )
             if roi.width() > 0 and roi.height() > 0:
-                self.roi_selected.emit(roi)
+                self.roi_points_selected.emit(rect_to_points(roi))
             self.roi_selection_finished.emit()
             self.update()
             event.accept()
@@ -222,17 +254,28 @@ class VideoCanvas(QWidget):
         y2 = min(max(y1 + 1, y2), self._video_size.height())
         return QRect(x1, y1, x2 - x1, y2 - y1)
 
-    def _original_to_display_rect(self, original_rect: QRect) -> QRectF:
+    def _display_to_original_point(self, point: QPointF) -> tuple[int, int]:
         if self._video_size.isEmpty() or self._display_rect.isEmpty():
-            return QRectF()
+            return (0, 0)
 
-        x_scale = self._display_rect.width() / self._video_size.width()
-        y_scale = self._display_rect.height() / self._video_size.height()
-        return QRectF(
-            self._display_rect.left() + original_rect.x() * x_scale,
-            self._display_rect.top() + original_rect.y() * y_scale,
-            original_rect.width() * x_scale,
-            original_rect.height() * y_scale,
+        x_ratio = (point.x() - self._display_rect.left()) / self._display_rect.width()
+        y_ratio = (point.y() - self._display_rect.top()) / self._display_rect.height()
+        x = int(round(x_ratio * (self._video_size.width() - 1)))
+        y = int(round(y_ratio * (self._video_size.height() - 1)))
+        return (
+            min(max(0, x), self._video_size.width() - 1),
+            min(max(0, y), self._video_size.height() - 1),
+        )
+
+    def _original_to_display_point(self, point: tuple[int, int]) -> QPointF:
+        if self._video_size.isEmpty() or self._display_rect.isEmpty():
+            return QPointF()
+
+        x_scale = self._display_rect.width() / max(1, self._video_size.width() - 1)
+        y_scale = self._display_rect.height() / max(1, self._video_size.height() - 1)
+        return QPointF(
+            self._display_rect.left() + point[0] * x_scale,
+            self._display_rect.top() + point[1] * y_scale,
         )
 
 
@@ -253,7 +296,7 @@ class VideoExtractWindow(QMainWindow):
         self.duration_seconds = 0.0
         self.playback_speed = 1.0
         self.is_playing = False
-        self.roi = QRect()
+        self.roi_points: list[tuple[int, int]] = []
         self._updating_slider = False
 
         self.play_timer = QTimer(self)
@@ -277,8 +320,10 @@ class VideoExtractWindow(QMainWindow):
         self.speed_2x_button = QPushButton("2×")
         self.speed_4x_button = QPushButton("4×")
         self.roi_button = QPushButton("ROI选择")
+        self.roi_poly_button = QPushButton("ROIpoly")
         self.capture_button = QPushButton("截屏")
         self.roi_info_label = QLabel("ROI: 未加载视频")
+        self.roi_info_label.setWordWrap(True)
         self.output_dir_edit = QLineEdit()
         self.output_dir_button = QPushButton("选择目录")
 
@@ -310,6 +355,7 @@ class VideoExtractWindow(QMainWindow):
             self.speed_2x_button,
             self.speed_4x_button,
             self.roi_button,
+            self.roi_poly_button,
             self.capture_button,
         ):
             control_layout.addWidget(button)
@@ -332,6 +378,7 @@ class VideoExtractWindow(QMainWindow):
         speed_group.addButton(self.speed_4x_button)
 
         self.roi_button.setCheckable(True)
+        self.roi_poly_button.setCheckable(True)
 
         toolbar = QToolBar("快捷键")
         toolbar.setMovable(False)
@@ -350,10 +397,11 @@ class VideoExtractWindow(QMainWindow):
         self.next_button.clicked.connect(self.next_frame)
         self.speed_2x_button.clicked.connect(lambda: self._set_speed(2.0))
         self.speed_4x_button.clicked.connect(lambda: self._set_speed(4.0))
-        self.roi_button.toggled.connect(self._set_roi_selection)
+        self.roi_button.toggled.connect(self._set_rect_roi_selection)
+        self.roi_poly_button.toggled.connect(self._set_poly_roi_selection)
         self.capture_button.clicked.connect(self.save_screenshot)
         self.output_dir_button.clicked.connect(self.choose_output_dir)
-        self.canvas.roi_selected.connect(self._on_roi_selected)
+        self.canvas.roi_points_selected.connect(self._on_roi_points_selected)
         self.canvas.roi_selection_finished.connect(self._finish_roi_selection)
 
         QShortcut(QKeySequence("Space"), self, activated=self.toggle_play_pause)
@@ -411,8 +459,8 @@ class VideoExtractWindow(QMainWindow):
             return
 
         frame_height, frame_width = self.current_frame.shape[:2]
-        self.roi = QRect(0, 0, frame_width, frame_height)
-        self.canvas.set_roi(self.roi)
+        self.roi_points = full_frame_points(frame_width, frame_height)
+        self.canvas.set_roi_points(self.roi_points)
         self._update_roi_label()
         self._update_controls_enabled(True)
         self._update_time_label()
@@ -466,12 +514,9 @@ class VideoExtractWindow(QMainWindow):
             return
 
         frame_height, frame_width = self.current_frame.shape[:2]
-        roi = self._clamped_roi(frame_width, frame_height)
-        crop = self.current_frame[
-            roi.y() : roi.y() + roi.height(),
-            roi.x() : roi.x() + roi.width(),
-        ]
-        if crop.size == 0:
+        roi_points = self._clamped_roi_points(frame_width, frame_height)
+        crop = warp_roi_to_rectangle(self.current_frame, roi_points)
+        if crop is None or crop.size == 0:
             QMessageBox.warning(self, "保存失败", "ROI 区域为空，无法截屏。")
             return
 
@@ -498,8 +543,8 @@ class VideoExtractWindow(QMainWindow):
         self.current_frame = frame
         self.current_frame_index = target
         self.canvas.set_frame(frame)
-        if not self.roi.isEmpty():
-            self.canvas.set_roi(self.roi)
+        if len(self.roi_points) == 4:
+            self.canvas.set_roi_points(self.roi_points)
         self._sync_slider_to_frame()
         self._update_time_label()
         return True
@@ -542,39 +587,57 @@ class VideoExtractWindow(QMainWindow):
         interval_ms = max(1, int(1000 / max(1.0, self.fps * self.playback_speed)))
         self.play_timer.start(interval_ms)
 
-    def _set_roi_selection(self, enabled: bool) -> None:
-        self.canvas.set_roi_selection_enabled(enabled and self.capture is not None)
+    def _set_rect_roi_selection(self, enabled: bool) -> None:
+        if enabled:
+            self._pause()
+            self.roi_poly_button.setChecked(False)
+        self.canvas.set_roi_selection_mode("rect" if enabled and self.capture is not None else None)
         if enabled and self.capture is None:
             self.roi_button.setChecked(False)
 
+    def _set_poly_roi_selection(self, enabled: bool) -> None:
+        if enabled:
+            self._pause()
+            self.roi_button.setChecked(False)
+            self.statusBar().showMessage("请在视频区域依次点击 4 个 ROIpoly 角点。", 5000)
+        self.canvas.set_roi_selection_mode("poly" if enabled and self.capture is not None else None)
+        if enabled and self.capture is None:
+            self.roi_poly_button.setChecked(False)
+
     def _finish_roi_selection(self) -> None:
         self.roi_button.setChecked(False)
-        self.canvas.set_roi_selection_enabled(False)
+        self.roi_poly_button.setChecked(False)
+        self.canvas.set_roi_selection_mode(None)
 
-    def _on_roi_selected(self, roi: QRect) -> None:
-        self.roi = QRect(roi)
-        self.canvas.set_roi(self.roi)
+    def _on_roi_points_selected(self, points: list[tuple[int, int]]) -> None:
+        if len(points) != 4 or not is_convex_quad(points):
+            QMessageBox.warning(self, "ROI 无效", "请选择 4 个能依次连接成凸四边形的点。")
+            return
+        self.roi_points = list(points)
+        self.canvas.set_roi_points(self.roi_points)
         self._update_roi_label()
 
-    def _clamped_roi(self, frame_width: int, frame_height: int) -> QRect:
-        if self.roi.isEmpty():
-            return QRect(0, 0, frame_width, frame_height)
+    def _clamped_roi_points(self, frame_width: int, frame_height: int) -> list[tuple[int, int]]:
+        if len(self.roi_points) != 4:
+            return full_frame_points(frame_width, frame_height)
 
-        x = min(max(0, self.roi.x()), frame_width - 1)
-        y = min(max(0, self.roi.y()), frame_height - 1)
-        width = min(max(1, self.roi.width()), frame_width - x)
-        height = min(max(1, self.roi.height()), frame_height - y)
-        return QRect(x, y, width, height)
+        return [
+            (
+                min(max(0, x), frame_width - 1),
+                min(max(0, y), frame_height - 1),
+            )
+            for x, y in self.roi_points
+        ]
 
     def _update_roi_label(self) -> None:
-        if self.roi.isEmpty():
+        if len(self.roi_points) != 4:
             self.roi_info_label.setText("ROI: 未设置")
             return
-        center_x = self.roi.x() + self.roi.width() / 2
-        center_y = self.roi.y() + self.roi.height() / 2
+        points_text = " ".join(
+            f"P{index}=({x}, {y})" for index, (x, y) in enumerate(self.roi_points, start=1)
+        )
         self.roi_info_label.setText(
-            f"ROI: 中心=({center_x:.1f}, {center_y:.1f}) "
-            f"W={self.roi.width()} H={self.roi.height()}"
+            f"ROI: {points_text}"
         )
 
     def _sync_slider_to_frame(self) -> None:
@@ -596,6 +659,7 @@ class VideoExtractWindow(QMainWindow):
             self.speed_2x_button,
             self.speed_4x_button,
             self.roi_button,
+            self.roi_poly_button,
             self.capture_button,
             self.progress_slider,
             self.output_dir_button,
@@ -608,6 +672,66 @@ class VideoExtractWindow(QMainWindow):
         if self.capture is not None:
             self.capture.release()
         self.capture = None
+
+
+def rect_to_points(rect: QRect) -> list[tuple[int, int]]:
+    """Convert a QRect ROI to ordered corner points in original pixel space."""
+
+    right = rect.x() + rect.width() - 1
+    bottom = rect.y() + rect.height() - 1
+    return [
+        (rect.x(), rect.y()),
+        (right, rect.y()),
+        (right, bottom),
+        (rect.x(), bottom),
+    ]
+
+
+def full_frame_points(frame_width: int, frame_height: int) -> list[tuple[int, int]]:
+    return rect_to_points(QRect(0, 0, frame_width, frame_height))
+
+
+def is_convex_quad(points: list[tuple[int, int]]) -> bool:
+    if len(points) != 4:
+        return False
+    contour = np.array(points, dtype=np.float32)
+    area = cv2.contourArea(contour)
+    if area <= 1.0:
+        return False
+    return bool(cv2.isContourConvex(contour.astype(np.int32)))
+
+
+def warp_roi_to_rectangle(
+    frame_bgr: np.ndarray,
+    points: list[tuple[int, int]],
+) -> Optional[np.ndarray]:
+    if len(points) != 4 or not is_convex_quad(points):
+        return None
+
+    src = np.array(points, dtype=np.float32)
+    width_top = np.linalg.norm(src[1] - src[0])
+    width_bottom = np.linalg.norm(src[2] - src[3])
+    height_right = np.linalg.norm(src[2] - src[1])
+    height_left = np.linalg.norm(src[3] - src[0])
+
+    output_width = max(1, int(round(max(width_top, width_bottom))) + 1)
+    output_height = max(1, int(round(max(height_right, height_left))) + 1)
+    dst = np.array(
+        [
+            [0, 0],
+            [output_width - 1, 0],
+            [output_width - 1, output_height - 1],
+            [0, output_height - 1],
+        ],
+        dtype=np.float32,
+    )
+    matrix = cv2.getPerspectiveTransform(src, dst)
+    return cv2.warpPerspective(
+        frame_bgr,
+        matrix,
+        (output_width, output_height),
+        flags=cv2.INTER_LINEAR,
+    )
 
 
 def format_seconds(seconds: float) -> str:
