@@ -20,7 +20,6 @@ from PySide6.QtGui import (
     QKeySequence,
     QPainter,
     QPen,
-    QPixmap,
     QShortcut,
 )
 from PySide6.QtWidgets import (
@@ -36,7 +35,6 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSlider,
     QStatusBar,
-    QStyle,
     QToolBar,
     QVBoxLayout,
     QWidget,
@@ -358,11 +356,11 @@ class VideoExtractWindow(QMainWindow):
         self.canvas.roi_selected.connect(self._on_roi_selected)
         self.canvas.roi_selection_finished.connect(self._finish_roi_selection)
 
-        QShortcut(QKeySequence(Qt.Key_Space), self, activated=self.toggle_play_pause)
-        QShortcut(QKeySequence(Qt.Key_Left), self, activated=self.previous_frame)
-        QShortcut(QKeySequence(Qt.Key_Right), self, activated=self.next_frame)
-        QShortcut(QKeySequence(Qt.Key_Return), self, activated=self.save_screenshot)
-        QShortcut(QKeySequence(Qt.Key_Enter), self, activated=self.save_screenshot)
+        QShortcut(QKeySequence("Space"), self, activated=self.toggle_play_pause)
+        QShortcut(QKeySequence("Left"), self, activated=self.previous_frame)
+        QShortcut(QKeySequence("Right"), self, activated=self.next_frame)
+        QShortcut(QKeySequence("Return"), self, activated=self.save_screenshot)
+        QShortcut(QKeySequence("Enter"), self, activated=self.save_screenshot)
 
     def open_video(self) -> None:
         file_path, _ = QFileDialog.getOpenFileName(
@@ -397,6 +395,14 @@ class VideoExtractWindow(QMainWindow):
 
         default_dir = path.with_suffix("")
         self.output_dir_edit.setText(str(default_dir))
+        try:
+            default_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            QMessageBox.warning(
+                self,
+                "目录创建失败",
+                f"无法创建默认保存目录:\n{default_dir}\n\n{exc}",
+            )
 
         if not self._read_frame(0):
             QMessageBox.critical(self, "读取失败", f"无法读取视频第一帧:\n{path}")
