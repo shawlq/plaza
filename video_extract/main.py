@@ -610,10 +610,11 @@ class VideoExtractWindow(QMainWindow):
         self.canvas.set_roi_selection_mode(None)
 
     def _on_roi_points_selected(self, points: list[tuple[int, int]]) -> None:
-        if len(points) != 4 or not is_convex_quad(points):
+        ordered_points = order_quad_points(points)
+        if len(ordered_points) != 4 or not is_convex_quad(ordered_points):
             QMessageBox.warning(self, "ROI 无效", "请选择 4 个能依次连接成凸四边形的点。")
             return
-        self.roi_points = list(points)
+        self.roi_points = ordered_points
         self.canvas.set_roi_points(self.roi_points)
         self._update_roi_label()
 
@@ -633,8 +634,10 @@ class VideoExtractWindow(QMainWindow):
         if len(self.roi_points) != 4:
             self.roi_info_label.setText("ROI: 未设置")
             return
+        labels = ("左上", "右上", "右下", "左下")
         points_text = " ".join(
-            f"P{index}=({x}, {y})" for index, (x, y) in enumerate(self.roi_points, start=1)
+            f"P{index}{labels[index - 1]}=({x}, {y})"
+            for index, (x, y) in enumerate(self.roi_points, start=1)
         )
         self.roi_info_label.setText(
             f"ROI: {points_text}"
@@ -691,10 +694,47 @@ def full_frame_points(frame_width: int, frame_height: int) -> list[tuple[int, in
     return rect_to_points(QRect(0, 0, frame_width, frame_height))
 
 
+def order_quad_points(points: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Order four ROI points as top-left, top-right, bottom-right, bottom-left."""
+
+    if len(points) != 4:
+        return []
+
+    polygon = _angle_sorted_points(points)
+    if len(polygon) != 4:
+        return []
+
+    # The top edge is identified from pixel positions, not from click order.
+    top_edge_index = min(
+        range(4),
+        key=lambda index: (
+            (polygon[index][1] + polygon[(index + 1) % 4][1]) / 2,
+            (polygon[index][0] + polygon[(index + 1) % 4][0]) / 2,
+        ),
+    )
+    next_index = (top_edge_index + 1) % 4
+    first = polygon[top_edge_index]
+    second = polygon[next_index]
+
+    if first[0] <= second[0]:
+        ordered = [polygon[(top_edge_index + offset) % 4] for offset in range(4)]
+    else:
+        ordered = [polygon[(next_index - offset) % 4] for offset in range(4)]
+    return [(int(round(x)), int(round(y))) for x, y in ordered]
+
+
+def _angle_sorted_points(points: list[tuple[int, int]]) -> list[tuple[float, float]]:
+    points_array = np.array(points, dtype=np.float32)
+    center = points_array.mean(axis=0)
+    angles = np.arctan2(points_array[:, 1] - center[1], points_array[:, 0] - center[0])
+    sorted_points = points_array[np.argsort(angles)]
+    return [(float(x), float(y)) for x, y in sorted_points]
+
+
 def is_convex_quad(points: list[tuple[int, int]]) -> bool:
     if len(points) != 4:
         return False
-    contour = np.array(points, dtype=np.float32)
+    contour = np.array(_angle_sorted_points(points), dtype=np.float32)
     area = cv2.contourArea(contour)
     if area <= 1.0:
         return False
@@ -705,10 +745,11 @@ def warp_roi_to_rectangle(
     frame_bgr: np.ndarray,
     points: list[tuple[int, int]],
 ) -> Optional[np.ndarray]:
-    if len(points) != 4 or not is_convex_quad(points):
+    ordered_points = order_quad_points(points)
+    if len(ordered_points) != 4 or not is_convex_quad(ordered_points):
         return None
 
-    src = np.array(points, dtype=np.float32)
+    src = np.array(ordered_points, dtype=np.float32)
     width_top = np.linalg.norm(src[1] - src[0])
     width_bottom = np.linalg.norm(src[2] - src[3])
     height_right = np.linalg.norm(src[2] - src[1])
