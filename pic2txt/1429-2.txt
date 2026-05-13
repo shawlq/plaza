@@ -1,0 +1,34 @@
+       ace zdrive
+namespace hdmap
+namespace trafficlane
+bool TrafficLane::InitCfgFwk(){
+    ICLuIHI IAAS6yif (CFG_RETURN(kNoError)I= init_res)(
+    return true;
+
+  @brief待定。
+  @param estimated_yaw
+  @return
+解释代码|生成文档|修复代码|生成测试|代码评审丨关闭
+yoid TrafficLane::AddEstimatedYawToconfig(const float& estimated_yaw){
+    constexpr float kMinYaw =0.1 *kDeg2Rad;
+    constexpr float kMaxYaw=0.5*kDeg2Rad;
+    if (std::fabs(estimated yaw)<kMinYaw Il std::fabs(estimated_yaw)> kMaxYaw)
+        return;
+    const cfgmanager::Cfgoptions cfg_options ={false, "",“"soc");
+    std::unique_ptr<EstimatedYaw> output_res = std::make_unique<EstimatedYaw>();
+    o
+    int32_t yaw_result=
+           CFG_KEY_ALG_ENV_cOGNITION_YAW, output_res, cfg_options);
+    if(yaw_result l=θ){
+       o
+     else{
+
+
+ *水
+*@brief 待定。
+*@return
+ */
+解释代码|生成文档|修复代码|生成测试|代码评审|关闭
+yoid TrafficLane::SetRoi(){
+    ZWARN <“[NodeConf] Set roi.;
+    if ((SetRoiFromVehCfg())(
