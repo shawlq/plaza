@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Video Extract WebApp</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="app-header">
+      <div>
+        <h1>Video Extract WebApp</h1>
+        <p>Ubuntu 22.04 + NVIDIA GPU 环境下的视频上传、播放与 ROIpoly 标注工具</p>
+      </div>
+      <div class="shortcut-hint">Space 播放/暂停 · ← 上一帧 · → 下一帧</div>
+    </header>
+
+    <main class="app-shell">
+      <section class="panel">
+        <h2>1. 上传视频（断点续传）</h2>
+        <div class="upload-row">
+          <input id="fileInput" type="file" accept="video/*" />
+          <button id="uploadButton">上传/继续上传</button>
+        </div>
+        <div class="progress">
+          <div id="uploadProgressBar" class="progress-bar"></div>
+        </div>
+        <div id="uploadStatus" class="muted">请选择本地视频文件。</div>
+      </section>
+
+      <section class="panel">
+        <h2>2. 在线视频</h2>
+        <div class="video-select-row">
+          <select id="videoSelect"></select>
+          <button id="refreshButton">刷新列表</button>
+          <button id="loadButton">加载视频</button>
+        </div>
+        <div id="videoInfo" class="muted">暂无视频。</div>
+      </section>
+
+      <section class="player-panel">
+        <div class="video-stage" id="videoStage">
+          <video id="videoPlayer" preload="metadata" playsinline></video>
+          <canvas id="roiCanvas"></canvas>
+          <div id="emptyState" class="empty-state">请选择或上传视频</div>
+        </div>
+
+        <div class="timeline-row">
+          <input id="seekSlider" type="range" min="0" max="0" value="0" step="1" disabled />
+          <div id="timeLabel">00:00:00.000 / 00:00:00.000</div>
+        </div>
+
+        <div class="controls">
+          <button id="playButton" disabled>播放</button>
+          <button id="prevButton" disabled>上一帧</button>
+          <button id="nextButton" disabled>下一帧</button>
+          <button id="roiPolyButton" disabled>ROIpoly</button>
+          <button id="recordButton" disabled>记录</button>
+          <button id="saveButton" disabled>保存</button>
+        </div>
+
+        <div class="directory-row">
+          <label for="outputDir">保存目录:</label>
+          <input id="outputDir" type="text" placeholder="加载视频后自动填充默认目录" disabled />
+          <button id="defaultDirButton" disabled>默认目录</button>
+        </div>
+
+        <div class="roi-info">
+          <strong>ROI:</strong>
+          <span id="roiInfo">未加载视频</span>
+        </div>
+        <div id="recordStatus" class="muted">记录会先写入服务端内存和 autosave 草稿，点击保存后写入视频同名 JSON。</div>
+      </section>
+
+      <section class="panel">
+        <h2>已记录内容</h2>
+        <pre id="recordsPreview">[]</pre>
+      </section>
+    </main>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

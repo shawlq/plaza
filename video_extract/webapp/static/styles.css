@@ -1,0 +1,254 @@
+:root {
+  color-scheme: dark;
+  --bg: #101318;
+  --panel: #181d24;
+  --panel-strong: #202733;
+  --text: #ecf2ff;
+  --muted: #95a3b8;
+  --primary: #3ddc97;
+  --primary-strong: #2abf82;
+  --danger: #ff6b6b;
+  --border: #2d3645;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Segoe UI", "Microsoft YaHei", Arial, sans-serif;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+button {
+  border: 0;
+  border-radius: 8px;
+  background: var(--primary);
+  color: #06120d;
+  cursor: pointer;
+  font-weight: 700;
+  padding: 10px 14px;
+}
+
+button:hover:not(:disabled) {
+  background: var(--primary-strong);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+input,
+select {
+  min-height: 40px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #0d1117;
+  color: var(--text);
+  padding: 8px 10px;
+}
+
+select {
+  min-width: 280px;
+}
+
+.app-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 22px 28px;
+  border-bottom: 1px solid var(--border);
+  background: #0d1117;
+}
+
+.app-header h1 {
+  margin: 0 0 6px;
+  font-size: 26px;
+}
+
+.app-header p,
+.muted {
+  color: var(--muted);
+}
+
+.app-header p {
+  margin: 0;
+}
+
+.shortcut-hint {
+  color: var(--primary);
+  white-space: nowrap;
+}
+
+.app-shell {
+  display: grid;
+  gap: 18px;
+  padding: 18px;
+}
+
+.panel,
+.player-panel {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--panel);
+  padding: 16px;
+}
+
+.panel h2 {
+  margin: 0 0 12px;
+  font-size: 18px;
+}
+
+.upload-row,
+.video-select-row,
+.controls,
+.directory-row,
+.timeline-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.upload-row input {
+  flex: 1;
+  min-width: 280px;
+}
+
+.video-select-row select,
+.directory-row input,
+.timeline-row input {
+  flex: 1;
+}
+
+.progress {
+  height: 12px;
+  overflow: hidden;
+  margin: 12px 0 8px;
+  border-radius: 999px;
+  background: #0d1117;
+  border: 1px solid var(--border);
+}
+
+.progress-bar {
+  width: 0%;
+  height: 100%;
+  background: linear-gradient(90deg, var(--primary), #71e4ff);
+  transition: width 120ms ease;
+}
+
+.video-stage {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-height: 360px;
+  height: min(68vh, 720px);
+  overflow: hidden;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: #000;
+}
+
+#videoPlayer,
+#roiCanvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+#videoPlayer {
+  object-fit: contain;
+}
+
+#roiCanvas {
+  pointer-events: auto;
+}
+
+.empty-state {
+  z-index: 2;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.timeline-row {
+  margin-top: 12px;
+}
+
+#timeLabel {
+  min-width: 210px;
+  text-align: right;
+  color: var(--muted);
+}
+
+.controls,
+.directory-row,
+.roi-info {
+  margin-top: 12px;
+}
+
+.directory-row label {
+  font-weight: 700;
+}
+
+.roi-info {
+  min-height: 28px;
+  color: var(--muted);
+}
+
+.roi-info strong {
+  color: var(--text);
+}
+
+#recordsPreview {
+  max-height: 260px;
+  overflow: auto;
+  margin: 0;
+  border-radius: 10px;
+  background: #0d1117;
+  border: 1px solid var(--border);
+  padding: 12px;
+  color: #d7e3f5;
+}
+
+.is-active {
+  background: #ffd166;
+  color: #201400;
+}
+
+.error {
+  color: var(--danger);
+}
+
+@media (max-width: 760px) {
+  .app-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .shortcut-hint {
+    white-space: normal;
+  }
+
+  button,
+  select,
+  input {
+    width: 100%;
+  }
+
+  #timeLabel {
+    width: 100%;
+    text-align: left;
+  }
+}
