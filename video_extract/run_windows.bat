@@ -1,5 +1,5 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-python -m pip install -r requirements.txt
+python -m pip install PySide6 opencv-python numpy fastapi "uvicorn[standard]"
 python main.py

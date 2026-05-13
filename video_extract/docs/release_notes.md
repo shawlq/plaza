@@ -28,3 +28,21 @@
 6. 增加“截屏”按钮，绑定回车键。点击“截屏”按钮或者回车键时，把 ROI 区域的图像保存到磁盘，保存的图像画质维持原视频的画质（按 ROI 的比例调整）。
 7. 增加一个目录选择框，默认在视频同目录下新建一个同名文件夹，不带后缀。例如视频为 `video_0512.mp4`，则目录为 `video_0512`。
 8. 在 `video_extract` 中新建 `docs/` 目录，把上述要求都保存到 `docs/` 目录下，命名为 `release_notes.md`。
+
+## Python 依赖
+
+桌面端与 WebApp 共用的 Python 包如下（原 `requirements.txt` 内容已合并于此）：
+
+| 包名 |
+| --- |
+| PySide6 |
+| opencv-python |
+| numpy |
+| fastapi |
+| uvicorn[standard] |
+
+安装示例：
+
+```bash
+python -m pip install PySide6 opencv-python numpy fastapi "uvicorn[standard]"
+```
