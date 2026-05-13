@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import os
+import shutil
 import subprocess
 import tempfile
 import time
@@ -14,6 +15,8 @@ from fastapi.testclient import TestClient
 class WebAppStreamingTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
+        if shutil.which("ffmpeg") is None:
+            raise unittest.SkipTest("ffmpeg 未安装，跳过 HLS 集成测试")
         cls.temp_dir = tempfile.TemporaryDirectory()
         cls.data_root = Path(cls.temp_dir.name) / "data"
         videos_root = cls.data_root / "videos"

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import shutil
 import subprocess
 import threading
 from datetime import datetime, timezone
@@ -20,6 +22,15 @@ _HLS_BUILDERS: dict[str, threading.Thread] = {}
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def ffmpeg_executable() -> str:
+    executable = os.environ.get("VIDEO_EXTRACT_FFMPEG_BIN", "ffmpeg").strip()
+    return executable or "ffmpeg"
+
+
+def ffmpeg_available() -> bool:
+    return shutil.which(ffmpeg_executable()) is not None
 
 
 def video_cache_key(video_path: Path) -> str:
@@ -47,6 +58,16 @@ def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
     temp_path = path.with_name(f".{path.name}.tmp")
     temp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     temp_path.replace(path)
+
+
+def _failed_status_payload(video_path: Path, output_dir: Path, error: str) -> dict[str, Any]:
+    return {
+        "state": "failed",
+        "error": error,
+        "updated_at": _utc_now(),
+        "source_name": video_path.name,
+        "cache_dir": str(output_dir),
+    }
 
 
 def _read_status(path: Path) -> dict[str, Any] | None:
@@ -100,8 +121,9 @@ def build_ffmpeg_hls_command(
 ) -> list[str]:
     rounded_fps = max(1, int(round(fps))) if fps > 0 else 25
     keyframe_interval = max(12, rounded_fps)
+    executable = ffmpeg_executable()
     return [
-        "ffmpeg",
+        executable,
         "-hide_banner",
         "-loglevel",
         "error",
@@ -172,20 +194,35 @@ def _build_hls_playlist(
     )
 
     command = build_ffmpeg_hls_command(video_path, output_dir, fps=fps, segment_seconds=segment_seconds)
-    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, check=False)
+    except FileNotFoundError:
+        _write_json_atomic(
+            status_path,
+            _failed_status_payload(
+                video_path,
+                output_dir,
+                f"HLS 不可用：未找到 ffmpeg，可安装 ffmpeg 或设置 VIDEO_EXTRACT_FFMPEG_BIN 指向可执行文件。",
+            ),
+        )
+        return
+    except Exception as exc:
+        _write_json_atomic(
+            status_path,
+            _failed_status_payload(video_path, output_dir, f"HLS 生成异常: {exc}"),
+        )
+        return
     log_text = (result.stdout or "") + (result.stderr or "")
     if log_text:
         log_path.write_text(log_text, encoding="utf-8")
     if result.returncode != 0 or not playlist_path.exists():
         _write_json_atomic(
             status_path,
-            {
-                "state": "failed",
-                "error": (result.stderr or result.stdout or "ffmpeg 未生成 HLS 播放列表").strip(),
-                "updated_at": _utc_now(),
-                "source_name": video_path.name,
-                "cache_dir": str(output_dir),
-            },
+            _failed_status_payload(
+                video_path,
+                output_dir,
+                (result.stderr or result.stdout or "ffmpeg 未生成 HLS 播放列表").strip(),
+            ),
         )
         return
 
@@ -210,8 +247,21 @@ def ensure_hls_generation(
     start_build: bool,
 ) -> dict[str, Any]:
     status = read_hls_status(cache_root, video_path)
-    if status["state"] == "ready" or not start_build:
+    if status["state"] in {"ready", "failed"} or not start_build:
         return status
+
+    if not ffmpeg_available():
+        output_dir = hls_cache_dir(cache_root, video_path)
+        status_path = hls_status_path(cache_root, video_path)
+        _write_json_atomic(
+            status_path,
+            _failed_status_payload(
+                video_path,
+                output_dir,
+                "HLS 不可用：未找到 ffmpeg，可安装 ffmpeg 或设置 VIDEO_EXTRACT_FFMPEG_BIN 指向可执行文件。",
+            ),
+        )
+        return read_hls_status(cache_root, video_path)
 
     key = str(hls_playlist_path(cache_root, video_path))
     with _HLS_BUILD_LOCK:

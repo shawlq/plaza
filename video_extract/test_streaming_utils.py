@@ -4,10 +4,13 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from webapp.streaming_utils import (
     HLS_PLAYLIST_NAME,
     build_ffmpeg_hls_command,
+    ensure_hls_generation,
+    ffmpeg_executable,
     hls_cache_dir,
     hls_status_path,
     read_hls_status,
@@ -40,6 +43,12 @@ class StreamingUtilsTests(unittest.TestCase):
         self.assertIn("-c:a aac", joined)
         self.assertIn("/tmp/out/segment-%05d.ts", joined)
         self.assertTrue(command[-1].endswith(f"/{HLS_PLAYLIST_NAME}"))
+
+    def test_build_ffmpeg_hls_command_uses_configured_binary(self) -> None:
+        with patch.dict("os.environ", {"VIDEO_EXTRACT_FFMPEG_BIN": "/opt/bin/ffmpeg-custom"}):
+            command = build_ffmpeg_hls_command(Path("/tmp/input.mp4"), Path("/tmp/out"), fps=25, segment_seconds=2)
+            self.assertEqual(command[0], "/opt/bin/ffmpeg-custom")
+            self.assertEqual(ffmpeg_executable(), "/opt/bin/ffmpeg-custom")
 
     def test_read_hls_status_defaults_to_missing(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -80,6 +89,17 @@ class StreamingUtilsTests(unittest.TestCase):
             status = read_hls_status(cache_root, video_path)
             self.assertEqual(status["state"], "ready")
             self.assertTrue(status["ready"])
+
+    def test_ensure_hls_generation_marks_failed_when_ffmpeg_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_root = Path(temp_dir) / "cache"
+            video_path = Path(temp_dir) / "demo.mp4"
+            video_path.write_bytes(b"x")
+            with patch("webapp.streaming_utils.shutil.which", return_value=None):
+                status = ensure_hls_generation(cache_root, video_path, fps=24.0, segment_seconds=2, start_build=True)
+            self.assertEqual(status["state"], "failed")
+            self.assertFalse(status["ready"])
+            self.assertIn("ffmpeg", status["error"])
 
 
 if __name__ == "__main__":
