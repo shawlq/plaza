@@ -14,8 +14,10 @@
    - Windows 11 上需要提前准备 `cimbar.exe`，可通过 `--cimbar-bin` 指定、放入 `cimbar_tool\bin\cimbar.exe`、加入 `PATH`，或设置 `CIMBAR_BIN` 环境变量。
 4. 在 `cimbar_tool/requirements.txt` 中记录工具依赖，便于执行 `python -m pip install -r requirements.txt`：
    - 当前 Python 脚本仅使用标准库，因此没有第三方 pip 依赖。
-   - libcimbar 是外部命令行程序依赖，不是 pip 包，需要按官方说明构建或安装。
+   - `pip install -r requirements.txt` 不会下载或生成 `cimbar.exe`。
+   - libcimbar 是外部命令行程序依赖，不是 pip 包；官方目前也没有提供 Windows `cimbar.exe` release，需要按官方说明构建或使用已有可执行文件。
 5. 增加 `cimbar_tool/smoke_test.py`，用于在未安装真实 `cimbar.exe` 的环境中通过临时假编码器验证批处理包装逻辑。
+6. 增加 `cimbar_tool/check_cimbar_setup.py`，用于检查本机是否能找到 `cimbar.exe`，并可通过 `--download-web-encoder` 下载官方 `cimbar_js.html` 供手动浏览器编码使用。
 
 ## 使用示例
 
@@ -24,6 +26,7 @@ cd cimbar_tool
 python -m venv .venv
 .venv\Scripts\activate
 python -m pip install -r requirements.txt
+python check_cimbar_setup.py
 python text_to_cimbar_png.py C:\path\to\text_dir --cimbar-bin C:\path\to\cimbar.exe
 ```
 
@@ -46,6 +49,7 @@ python smoke_test.py
 | 文件 | 说明 |
 |------|------|
 | `cimbar_tool/text_to_cimbar_png.py` | 文本目录批量转 cimbar PNG 的 Python 入口脚本 |
+| `cimbar_tool/check_cimbar_setup.py` | 检查 `cimbar.exe` 并可下载官方浏览器版编码器的辅助脚本 |
 | `cimbar_tool/smoke_test.py` | 不依赖真实 libcimbar 的 smoke 验证脚本 |
 | `cimbar_tool/run_windows.bat` | Windows 11 虚拟环境安装与启动脚本 |
 | `cimbar_tool/requirements.txt` | Python 依赖说明 |

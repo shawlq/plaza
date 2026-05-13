@@ -4,6 +4,13 @@
 # file is intentionally empty and remains safe to install with:
 #   python -m pip install -r requirements.txt
 #
-# External runtime dependency:
-# - libcimbar command line encoder (cimbar.exe on Windows)
+# Important:
+# - pip will not download or install cimbar.exe.
+# - libcimbar is currently not published as a pip package.
+# - The official libcimbar release provides Web assets such as cimbar_js.html,
+#   but not an official Windows cimbar.exe.
+#
+# External runtime dependency for automated PNG export:
+# - libcimbar command line encoder (cimbar.exe on Windows), built or provided
+#   separately.
 #   https://github.com/sz3/libcimbar

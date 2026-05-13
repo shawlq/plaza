@@ -17,13 +17,24 @@ cd cimbar_tool
 python -m venv .venv
 .venv\Scripts\activate
 python -m pip install -r requirements.txt
+python check_cimbar_setup.py
 ```
 
-`requirements.txt` 只覆盖 Python 依赖。当前脚本仅使用 Python 标准库；另需准备 libcimbar 命令行程序：
+`requirements.txt` 只覆盖 Python 依赖。当前脚本仅使用 Python 标准库，所以这一步不会下载任何第三方包，也不会生成 `cimbar.exe`。
 
-- 从 <https://github.com/sz3/libcimbar> 按官方说明构建 `cimbar`。
+自动批量导出 PNG 还需要额外准备 libcimbar 命令行程序：
+
+- 从 <https://github.com/sz3/libcimbar> 按官方说明构建 `cimbar`；官方目前没有提供 pip 包，也没有官方 Windows `cimbar.exe` release。
 - Windows 11 上请将构建出的 `cimbar.exe` 放到 `cimbar_tool\bin\cimbar.exe`，或加入 `PATH`，或运行脚本时传入 `--cimbar-bin`。
 - 也可以设置环境变量 `CIMBAR_BIN=C:\path\to\cimbar.exe`。
+
+如果只是想拿到官方浏览器版编码器，可执行：
+
+```bat
+python check_cimbar_setup.py --download-web-encoder
+```
+
+然后打开 `cimbar_tool\vendor\cimbar_js.html` 手动选择文件编码。注意：浏览器版是手动工具，不等价于本仓库的目录批量自动导出脚本。
 
 ## 使用方式
 
