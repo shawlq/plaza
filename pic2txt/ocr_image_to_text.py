@@ -40,47 +40,105 @@ def _median(xs: list[float]) -> float:
     if not xs:
         return 12.0
     ys = sorted(xs)
-    return float(ys[len(ys) // 2])
+    n = len(ys)
+    mid = n // 2
+    if n % 2:
+        return float(ys[mid])
+    return float((ys[mid - 1] + ys[mid]) / 2.0)
+
+
+def _char_width_estimate(result: list, med_h: float) -> float:
+    """用检测框宽度/文本长度估计平均字符宽度，用于把像素缩进换成空格。"""
+    ratios: list[float] = []
+    for box, text, _score in result:
+        t = str(text).strip()
+        if not t:
+            continue
+        xs = [p[0] for p in box]
+        w = float(max(xs) - min(xs))
+        ratios.append(w / max(1, len(t)))
+    if not ratios:
+        return max(6.0, med_h * 0.52)
+    est = _median(ratios)
+    return float(max(4.0, min(med_h * 1.15, est)))
 
 
 def _cluster_text_lines(
-    items: list[tuple[float, float, str]],
+    items: list[tuple[float, float, float, float, float, str]],
     *,
     y_tol: float,
+    med_h: float,
+    char_w: float,
 ) -> str:
-    """按行聚合同一基线的检测框，按 x 拼接文本。"""
+    """按行聚合同一基线的检测框，按 x 拼接文本；按行间空白插入空行；按最左框加前导空格。"""
     rows = sorted(items, key=lambda r: (r[0], r[1]))
-    merged: list[list[tuple[float, float, str]]] = []
+    merged: list[list[tuple[float, float, float, float, float, str]]] = []
     y_sums: list[list[float]] = []
-    for cy, cx, tx in rows:
+    for cy, cx, left, ymin, ymax, tx in rows:
         if not merged:
-            merged.append([(cy, cx, tx)])
+            merged.append([(cy, cx, left, ymin, ymax, tx)])
             y_sums.append([cy])
             continue
         mean_y = sum(y_sums[-1]) / len(y_sums[-1])
         if abs(cy - mean_y) <= y_tol:
-            merged[-1].append((cy, cx, tx))
+            merged[-1].append((cy, cx, left, ymin, ymax, tx))
             y_sums[-1].append(cy)
         else:
-            merged.append([(cy, cx, tx)])
+            merged.append([(cy, cx, left, ymin, ymax, tx)])
             y_sums.append([cy])
-    out_lines: list[str] = []
+
+    # mean_y, line_left, y_top, y_bot, line_text
+    row_meta: list[tuple[float, float, float, float, str]] = []
     for parts in merged:
         parts.sort(key=lambda p: p[1])
-        out_lines.append("".join(p[2] for p in parts if p[2]))
+        mean_y = sum(p[0] for p in parts) / len(parts)
+        line_left = min(p[2] for p in parts)
+        y_top = min(p[3] for p in parts)
+        y_bot = max(p[4] for p in parts)
+        line_text = "".join(p[5] for p in parts if p[5])
+        row_meta.append((mean_y, line_left, y_top, y_bot, line_text))
+
+    if not row_meta:
+        return ""
+
+    base_left = min(r[1] for r in row_meta)
+    cw = max(char_w, 1e-6)
+    row_heights = [max(1e-3, r[3] - r[2]) for r in row_meta]
+    h_ref = float(max(med_h * 0.68, min(_median(row_heights), med_h * 2.25)))
+
+    out_lines: list[str] = []
+    for i, (_my, line_left, y_top, y_bot, line_text) in enumerate(row_meta):
+        if i > 0:
+            _py, _pl, _pt, prev_bot, _ptx = row_meta[i - 1]
+            # 上一行底到当前行顶的像素空白（含空行区域），比「中心 y 差」更稳
+            gap_vis = float(y_top - prev_bot)
+            if gap_vis <= h_ref * 0.48:
+                n_blank = 0
+            else:
+                span = max(h_ref * 0.82, 1e-3)
+                n_blank = max(0, min(80, int((gap_vis - h_ref * 0.22) / span)))
+            out_lines.extend([""] * n_blank)
+        indent_px = max(0.0, line_left - base_left)
+        n_spaces = int(round(indent_px / cw))
+        prefix = " " * n_spaces
+        out_lines.append(prefix + line_text)
     return "\n".join(out_lines)
 
 
-def _rapidocr_items(result: list) -> list[tuple[float, float, str]]:
-    items: list[tuple[float, float, str]] = []
+def _rapidocr_items(result: list) -> list[tuple[float, float, float, float, float, str]]:
+    """每个检测框: (中心 y, 中心 x, 左边界 x, 上边界 y, 下边界 y, 文本)。"""
+    items: list[tuple[float, float, float, float, float, str]] = []
     for box, text, _score in result:
         xs = [p[0] for p in box]
         ys = [p[1] for p in box]
         cx = sum(xs) / 4.0
         cy = sum(ys) / 4.0
+        left = float(min(xs))
+        ymin = float(min(ys))
+        ymax = float(max(ys))
         t = str(text).strip()
         if t:
-            items.append((cy, cx, t))
+            items.append((cy, cx, left, ymin, ymax, t))
     return items
 
 
@@ -103,8 +161,9 @@ def run_rapidocr(image: Image.Image) -> tuple[str, float]:
         return "", 12.0
     med_h = _median(_box_heights(result))
     y_tol = max(8.0, min(18.0, med_h * 0.55))
+    char_w = _char_width_estimate(result, med_h)
     items = _rapidocr_items(result)
-    return _cluster_text_lines(items, y_tol=y_tol), med_h
+    return _cluster_text_lines(items, y_tol=y_tol, med_h=med_h, char_w=char_w), med_h
 
 
 def _load_rgb(path: Path) -> Image.Image:
@@ -189,7 +248,9 @@ def main() -> int:
         )
 
     text, _med_h = run_rapidocr(image)
-    text = text.strip() + ("\n" if text.strip() else "")
+    # 保留首行缩进与内部空行，仅统一结尾换行
+    if text and not text.endswith("\n"):
+        text += "\n"
 
     if args.output:
         out_path = Path(args.output).expanduser().resolve()
