@@ -15,10 +15,11 @@ import re
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Optional
 from urllib.parse import quote
 
 import cv2
+import numpy as np
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -45,7 +46,7 @@ AUTOSAVE_SUFFIX = ".autosave.json"
 CHUNK_SIZE = 1024 * 1024
 UPLOAD_ID_PATTERN = re.compile(r"^[a-f0-9]{24}$")
 
-app = FastAPI(title="Video Extract WebApp", version="0.3")
+app = FastAPI(title="Video Extract WebApp", version="0.4")
 _annotation_sessions: dict[str, dict[str, Any]] = {}
 
 
@@ -71,6 +72,92 @@ class AnnotationRecordRequest(BaseModel):
 
 class AnnotationSaveRequest(BaseModel):
     video_id: str = Field(min_length=1)
+
+
+class AnnotationExportRequest(BaseModel):
+    video_id: str = Field(min_length=1)
+
+
+def _angle_sorted_points_for_warp(points: list[tuple[int, int]]) -> list[tuple[float, float]]:
+    points_array = np.array(points, dtype=np.float32)
+    center = points_array.mean(axis=0)
+    angles = np.arctan2(points_array[:, 1] - center[1], points_array[:, 0] - center[0])
+    sorted_points = points_array[np.argsort(angles)]
+    return [(float(x), float(y)) for x, y in sorted_points]
+
+
+def order_quad_points_for_warp(points: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Order four ROI points as top-left, top-right, bottom-right, bottom-left (desktop ``main.py``)."""
+
+    if len(points) != 4:
+        return []
+
+    polygon = _angle_sorted_points_for_warp(points)
+    if len(polygon) != 4:
+        return []
+
+    top_edge_index = min(
+        range(4),
+        key=lambda index: (
+            (polygon[index][1] + polygon[(index + 1) % 4][1]) / 2,
+            (polygon[index][0] + polygon[(index + 1) % 4][0]) / 2,
+        ),
+    )
+    next_index = (top_edge_index + 1) % 4
+    first = polygon[top_edge_index]
+    second = polygon[next_index]
+
+    if first[0] <= second[0]:
+        ordered = [polygon[(top_edge_index + offset) % 4] for offset in range(4)]
+    else:
+        ordered = [polygon[(next_index - offset) % 4] for offset in range(4)]
+    return [(int(round(x)), int(round(y))) for x, y in ordered]
+
+
+def is_convex_quad_for_warp(points: list[tuple[int, int]]) -> bool:
+    if len(points) != 4:
+        return False
+    contour = np.array(_angle_sorted_points_for_warp(points), dtype=np.float32)
+    area = cv2.contourArea(contour)
+    if area <= 1.0:
+        return False
+    return bool(cv2.isContourConvex(contour.astype(np.int32)))
+
+
+def warp_roi_to_rectangle(
+    frame_bgr: np.ndarray,
+    points: list[tuple[int, int]],
+) -> Optional[np.ndarray]:
+    """Perspective-rectify ROI quad; geometry and interpolation match desktop ``main.py``."""
+
+    ordered_points = order_quad_points_for_warp(points)
+    if len(ordered_points) != 4 or not is_convex_quad_for_warp(ordered_points):
+        return None
+
+    src = np.array(ordered_points, dtype=np.float32)
+    width_top = np.linalg.norm(src[1] - src[0])
+    width_bottom = np.linalg.norm(src[2] - src[3])
+    height_right = np.linalg.norm(src[2] - src[1])
+    height_left = np.linalg.norm(src[3] - src[0])
+
+    output_width = max(1, int(round(max(width_top, width_bottom))) + 1)
+    output_height = max(1, int(round(max(height_right, height_left))) + 1)
+    dst = np.array(
+        [
+            [0, 0],
+            [output_width - 1, 0],
+            [output_width - 1, output_height - 1],
+            [0, output_height - 1],
+        ],
+        dtype=np.float32,
+    )
+    matrix = cv2.getPerspectiveTransform(src, dst)
+    return cv2.warpPerspective(
+        frame_bgr,
+        matrix,
+        (output_width, output_height),
+        flags=cv2.INTER_LINEAR,
+    )
 
 
 @app.on_event("startup")
@@ -489,6 +576,84 @@ def save_annotations(payload: AnnotationSaveRequest) -> dict[str, Any]:
         "saved": True,
         "record_count": len(session.get("records", [])),
         "json_path": str(final_path),
+    }
+
+
+@app.post("/api/annotations/export-images")
+def export_annotation_images(payload: AnnotationExportRequest) -> dict[str, Any]:
+    """Save final JSON, then render each record to PNG using the saved file as source of truth."""
+
+    video_path = _video_path_from_id(payload.video_id)
+    session = _load_or_create_session(video_path)
+    final_path = _flush_session(payload.video_id, session, final=True)
+    autosave_path = video_path.with_name(f"{video_path.stem}{AUTOSAVE_SUFFIX}")
+    if autosave_path.exists():
+        autosave_path.unlink()
+
+    data = json.loads(final_path.read_text(encoding="utf-8"))
+    records = data.get("records") or []
+    if not records:
+        raise HTTPException(status_code=400, detail="没有可导出的记录，请先「记录」。")
+
+    stem = video_path.stem
+    capture = cv2.VideoCapture(str(video_path))
+    if not capture.isOpened():
+        raise HTTPException(status_code=500, detail="无法打开视频文件")
+
+    total_frames = int(capture.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+    exported: list[str] = []
+    errors: list[dict[str, Any]] = []
+
+    try:
+        for index, rec in enumerate(records):
+            try:
+                frame_id = int(rec["frame_id"])
+                roi_raw = rec.get("roi_points") or []
+                if len(roi_raw) != 4:
+                    raise ValueError("roi_points 必须为 4 个点")
+                points = [(int(p["x"]), int(p["y"])) for p in roi_raw]
+                output_dir_text = str(rec.get("output_dir") or "").strip()
+                if not output_dir_text:
+                    raise ValueError("output_dir 为空")
+                out_dir = Path(output_dir_text).expanduser().resolve()
+                out_dir.mkdir(parents=True, exist_ok=True)
+
+                if total_frames and (frame_id < 0 or frame_id >= total_frames):
+                    raise ValueError(f"frame_id 超出范围: {frame_id}")
+
+                capture.set(cv2.CAP_PROP_POS_FRAMES, frame_id)
+                ok, frame = capture.read()
+                if not ok or frame is None:
+                    raise ValueError(f"无法读取帧 {frame_id}")
+
+                warped = warp_roi_to_rectangle(frame, points)
+                if warped is None or warped.size == 0:
+                    raise ValueError("ROI 透视矫正失败")
+
+                out_path = out_dir / f"{stem}_{frame_id}.png"
+                if not cv2.imwrite(
+                    str(out_path),
+                    warped,
+                    [int(cv2.IMWRITE_PNG_COMPRESSION), 1],
+                ):
+                    raise ValueError(f"无法写入图像: {out_path}")
+                exported.append(str(out_path))
+            except Exception as exc:
+                errors.append(
+                    {
+                        "index": index,
+                        "frame_id": rec.get("frame_id"),
+                        "error": str(exc),
+                    }
+                )
+    finally:
+        capture.release()
+
+    return {
+        "json_path": str(final_path),
+        "exported_count": len(exported),
+        "paths": exported,
+        "errors": errors,
     }
 
 

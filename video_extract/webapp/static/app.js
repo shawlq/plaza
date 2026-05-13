@@ -31,6 +31,7 @@ const elements = {
   roiPolyButton: document.querySelector("#roiPolyButton"),
   recordButton: document.querySelector("#recordButton"),
   saveButton: document.querySelector("#saveButton"),
+  exportImagesButton: document.querySelector("#exportImagesButton"),
   outputDir: document.querySelector("#outputDir"),
   defaultDirButton: document.querySelector("#defaultDirButton"),
   roiInfo: document.querySelector("#roiInfo"),
@@ -189,6 +190,26 @@ async function uploadSelectedFile() {
   }
 }
 
+async function prefetchAnnotationsForSelectedVideo() {
+  const videoId = elements.videoSelect.value;
+  if (!videoId || (state.currentVideo && state.currentVideo.id === videoId)) {
+    return;
+  }
+  try {
+    const annotations = await apiJson(`/api/annotations/${encodeURIComponent(videoId)}`);
+    if (elements.videoSelect.value !== videoId || (state.currentVideo && state.currentVideo.id === videoId)) {
+      return;
+    }
+    elements.recordsPreview.textContent = JSON.stringify(annotations.annotation?.records || [], null, 2);
+    setStatus(
+      elements.recordStatus,
+      `已加载「${videoId}」的 JSON（${annotations.record_count || 0} 条）。点击「加载视频」以打开播放器并同步画布。`,
+    );
+  } catch (error) {
+    setStatus(elements.recordStatus, `读取标注 JSON 失败: ${error.message}`, true);
+  }
+}
+
 async function loadSelectedVideo() {
   const videoId = elements.videoSelect.value;
   if (videoId) {
@@ -197,12 +218,16 @@ async function loadSelectedVideo() {
 }
 
 async function loadVideo(videoId) {
-  const payload = await apiJson(`/api/videos/${encodeURIComponent(videoId)}`);
+  const [payload, annotations] = await Promise.all([
+    apiJson(`/api/videos/${encodeURIComponent(videoId)}`),
+    apiJson(`/api/annotations/${encodeURIComponent(videoId)}`),
+  ]);
+
   state.currentVideo = payload.video;
   state.roiMode = false;
   state.pendingRoiPoints = [];
   state.roiPoints = fullFrameRoiPoints();
-  state.annotation = { records: [] };
+  state.annotation = annotations.annotation || { records: [] };
   state.unsaved = false;
 
   elements.videoPlayer.src = state.currentVideo.stream_url;
@@ -216,12 +241,11 @@ async function loadVideo(videoId) {
   updateRoiInfo();
   drawRoiOverlay();
 
-  const annotations = await apiJson(`/api/annotations/${encodeURIComponent(videoId)}`);
-  state.annotation = annotations.annotation || { records: [] };
   if (state.annotation.output_dir) {
     elements.outputDir.value = state.annotation.output_dir;
   }
   elements.saveButton.disabled = false;
+  elements.exportImagesButton.disabled = false;
   updateRecordsPreview();
   setStatus(
     elements.recordStatus,
@@ -541,6 +565,33 @@ async function saveAnnotations() {
   }
 }
 
+async function exportAnnotationImages() {
+  if (!state.currentVideo) {
+    return;
+  }
+  elements.exportImagesButton.disabled = true;
+  try {
+    setStatus(elements.recordStatus, "正在保存 JSON 并导出图片…");
+    const payload = await apiJson("/api/annotations/export-images", {
+      method: "POST",
+      body: JSON.stringify({ video_id: state.currentVideo.id }),
+    });
+    state.unsaved = false;
+    const failed = payload.errors?.length ? `，${payload.errors.length} 条失败` : "";
+    setStatus(
+      elements.recordStatus,
+      `已写入 ${payload.json_path}；导出 ${payload.exported_count} 张 PNG${failed}。`,
+    );
+    if (payload.errors?.length) {
+      console.warn("export-images errors", payload.errors);
+    }
+  } catch (error) {
+    setStatus(elements.recordStatus, `导出失败: ${error.message}`, true);
+  } finally {
+    elements.exportImagesButton.disabled = false;
+  }
+}
+
 function updateRecordsPreview() {
   elements.recordsPreview.textContent = JSON.stringify(state.annotation.records || [], null, 2);
 }
@@ -554,6 +605,7 @@ function useDefaultOutputDir() {
 function bindEvents() {
   elements.uploadButton.addEventListener("click", uploadSelectedFile);
   elements.refreshButton.addEventListener("click", () => refreshVideos().catch((error) => setStatus(elements.videoInfo, error.message, true)));
+  elements.videoSelect.addEventListener("change", () => prefetchAnnotationsForSelectedVideo().catch(() => undefined));
   elements.loadButton.addEventListener("click", () => loadSelectedVideo().catch((error) => setStatus(elements.videoInfo, error.message, true)));
   elements.playButton.addEventListener("click", togglePlayPause);
   elements.prevButton.addEventListener("click", () => stepFrame(-1));
@@ -561,6 +613,7 @@ function bindEvents() {
   elements.roiPolyButton.addEventListener("click", toggleRoiMode);
   elements.recordButton.addEventListener("click", recordCurrentFrame);
   elements.saveButton.addEventListener("click", saveAnnotations);
+  elements.exportImagesButton.addEventListener("click", exportAnnotationImages);
   elements.defaultDirButton.addEventListener("click", useDefaultOutputDir);
   elements.seekSlider.addEventListener("input", seekToSlider);
   elements.roiCanvas.addEventListener("click", handleCanvasClick);

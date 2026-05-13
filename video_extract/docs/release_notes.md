@@ -1,5 +1,10 @@
 # Release Notes
 
+## v0.4 webapp支持导出 2026.05.13
+
+1. 在在线视频下拉框中选中某条时已请求并展示其标注 JSON（未点「加载视频」时仍会预拉取记录列表）；点击「加载视频」时并行获取视频信息与 JSON，一并同步到画布与输出目录。
+2. 新增「导出图片」按钮：先将会话固化保存为 `{视频名无后缀}.json`，再按该文件中每条记录的 `frame_id`、`roi_points` 与 `output_dir`，用 OpenCV 从原视频读取对应帧，对 ROI 做与桌面端 `main.py` 相同的透视矫正（`INTER_LINEAR`、`getPerspectiveTransform` 与输出尺寸推导一致），以 PNG 无损写入各条目的 `output_dir`，文件名为 `{视频名无后缀}_{frame_id}.png`。
+
 ## v0.3， webapp， 2026.05.13
 
 1. 在 `video_extract/webapp` 下开发前后端 WebApp，面向 Ubuntu 22.04 + NVIDIA GPU 环境部署。
