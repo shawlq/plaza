@@ -56,6 +56,14 @@ python text_to_cimbar_png.py C:\path\to\text_dir --dry-run
 run_windows.bat C:\path\to\text_dir --cimbar-bin C:\path\to\cimbar.exe
 ```
 
+## Smoke 验证
+
+仓库内提供可复用 smoke 测试，不依赖真实 `cimbar.exe`，会用临时假编码器验证 Python 包装脚本的扫描、输出目录、子进程调用和 `manifest.json` 生成逻辑：
+
+```bat
+python smoke_test.py
+```
+
 ## 默认扫描的文本扩展名
 
 `.txt`, `.md`, `.csv`, `.json`, `.jsonl`, `.xml`, `.html`, `.htm`, `.log`, `.ini`, `.cfg`, `.yaml`, `.yml`
