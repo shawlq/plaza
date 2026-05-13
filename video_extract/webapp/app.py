@@ -490,6 +490,39 @@ def _file_iterator(path: Path, start: int, end: int) -> Iterable[bytes]:
             yield chunk
 
 
+def _parse_byte_range(range_header: str, file_size: int) -> tuple[int, int]:
+    try:
+        unit, value = range_header.split("=", 1)
+        if unit.strip().lower() != "bytes":
+            raise ValueError
+        ranges = [item.strip() for item in value.split(",") if item.strip()]
+        if len(ranges) != 1:
+            raise ValueError
+        start_text, end_text = ranges[0].split("-", 1)
+    except ValueError as exc:
+        raise HTTPException(status_code=416, detail="Range 请求无效") from exc
+
+    if start_text:
+        try:
+            start = int(start_text)
+            end = int(end_text) if end_text else file_size - 1
+        except ValueError as exc:
+            raise HTTPException(status_code=416, detail="Range 请求无效") from exc
+    else:
+        try:
+            suffix_length = int(end_text)
+        except ValueError as exc:
+            raise HTTPException(status_code=416, detail="Range 请求无效") from exc
+        if suffix_length <= 0:
+            raise HTTPException(status_code=416, detail="Range 请求无效")
+        start = max(file_size - suffix_length, 0)
+        end = file_size - 1
+
+    if start < 0 or end < start or start >= file_size:
+        raise HTTPException(status_code=416, detail="Range 请求超出文件大小")
+    return start, min(end, file_size - 1)
+
+
 @app.get("/api/videos/{video_id}/stream")
 def stream_video(video_id: str, request: Request):
     path = _video_path_from_id(video_id)
@@ -501,19 +534,7 @@ def stream_video(video_id: str, request: Request):
         response.headers["Accept-Ranges"] = "bytes"
         return response
 
-    try:
-        unit, value = range_header.split("=", 1)
-        if unit.strip().lower() != "bytes":
-            raise ValueError
-        start_text, end_text = value.split("-", 1)
-        start = int(start_text) if start_text else 0
-        end = int(end_text) if end_text else file_size - 1
-    except ValueError as exc:
-        raise HTTPException(status_code=416, detail="Range 请求无效") from exc
-
-    if start < 0 or end < start or start >= file_size:
-        raise HTTPException(status_code=416, detail="Range 请求超出文件大小")
-    end = min(end, file_size - 1)
+    start, end = _parse_byte_range(range_header, file_size)
     headers = {
         "Accept-Ranges": "bytes",
         "Content-Range": f"bytes {start}-{end}/{file_size}",
