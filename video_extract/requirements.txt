@@ -1,0 +1,17 @@
+# Python dependencies for Video Extract.
+#
+# Install with:
+#   python -m pip install -r requirements.txt
+#
+# HLS streaming in the WebApp also requires a system ffmpeg binary.
+# Pip cannot install ffmpeg itself. Please install it with conda:
+#   conda install -c conda-forge ffmpeg
+#
+# If ffmpeg is installed outside PATH, point the WebApp to it with:
+#   export VIDEO_EXTRACT_FFMPEG_BIN=/absolute/path/to/ffmpeg
+
+PySide6
+opencv-python
+numpy
+fastapi
+uvicorn[standard]

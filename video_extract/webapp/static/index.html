@@ -36,11 +36,12 @@
           <button id="loadButton">加载视频</button>
         </div>
         <div id="videoInfo" class="muted">暂无视频。</div>
+        <div id="playbackInfo" class="muted">播放模式：未加载视频。</div>
       </section>
 
       <section class="player-panel">
         <div class="video-stage" id="videoStage">
-          <video id="videoPlayer" preload="metadata" playsinline></video>
+          <video id="videoPlayer" preload="auto" playsinline></video>
           <canvas id="roiCanvas"></canvas>
           <div id="emptyState" class="empty-state">请选择或上传视频</div>
         </div>
@@ -79,6 +80,7 @@
       </section>
     </main>
 
+    <script src="/vendor/hls.min.js"></script>
     <script src="/app.js" type="module"></script>
   </body>
 </html>

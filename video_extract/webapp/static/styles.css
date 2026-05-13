@@ -110,6 +110,10 @@ select {
   font-size: 18px;
 }
 
+#playbackInfo {
+  margin-top: 6px;
+}
+
 .upload-row,
 .video-select-row,
 .controls,

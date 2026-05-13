@@ -8,6 +8,13 @@ const state = {
   roiMode: false,
   annotation: { records: [] },
   unsaved: false,
+  activePlaybackMode: null,
+  hlsController: null,
+  hlsPollTimer: 0,
+  pendingSeekTime: null,
+  pendingAutoplay: false,
+  hlsBlockedVideoId: null,
+  seekDebounceTimer: 0,
 };
 
 const elements = {
@@ -19,6 +26,7 @@ const elements = {
   refreshButton: document.querySelector("#refreshButton"),
   loadButton: document.querySelector("#loadButton"),
   videoInfo: document.querySelector("#videoInfo"),
+  playbackInfo: document.querySelector("#playbackInfo"),
   videoStage: document.querySelector("#videoStage"),
   videoPlayer: document.querySelector("#videoPlayer"),
   roiCanvas: document.querySelector("#roiCanvas"),
@@ -100,6 +108,197 @@ function setUploadProgress(offset, size) {
   elements.uploadProgressBar.style.width = `${percent}%`;
 }
 
+function supportsNativeHls() {
+  return Boolean(elements.videoPlayer.canPlayType("application/vnd.apple.mpegurl"));
+}
+
+function supportsManagedHls() {
+  return Boolean(window.Hls && window.Hls.isSupported());
+}
+
+function canUseHlsPlayback() {
+  return supportsNativeHls() || supportsManagedHls();
+}
+
+function clearHlsPolling() {
+  if (state.hlsPollTimer) {
+    window.clearTimeout(state.hlsPollTimer);
+    state.hlsPollTimer = 0;
+  }
+}
+
+function destroyHlsController() {
+  if (state.hlsController) {
+    state.hlsController.destroy();
+    state.hlsController = null;
+  }
+}
+
+function describePlayback(playback) {
+  if (!state.currentVideo || !playback) {
+    return "播放模式：未加载视频。";
+  }
+  if (state.activePlaybackMode === "hls") {
+    return "播放模式：HLS 分片流（拖动进度条时会按切片重新缓冲）。";
+  }
+  if (playback.hls_state === "failed") {
+    return `播放模式：Range 直读（HLS 准备失败：${playback.hls_error || "未知错误"}）。`;
+  }
+  if (!canUseHlsPlayback()) {
+    return "播放模式：Range 直读（当前浏览器未启用 HLS.js，继续使用字节流播放）。";
+  }
+  if (playback.hls_ready) {
+    return "播放模式：Range 直读（HLS 已就绪，但当前浏览器回退到了字节流模式）。";
+  }
+  if (playback.hls_state === "preparing") {
+    return "播放模式：Range 直读（后台正在生成 HLS 切片，稍后自动切换）。";
+  }
+  return "播放模式：Range 直读（已启用 Range 请求，可直接 seek）。";
+}
+
+function updatePlaybackInfo(playback = state.currentVideo?.playback || null, isError = false) {
+  setStatus(elements.playbackInfo, describePlayback(playback), isError);
+}
+
+function queuePlaybackRestore(preserveTime = 0, autoplay = false) {
+  state.pendingSeekTime = Number.isFinite(preserveTime) ? Math.max(0, preserveTime) : 0;
+  state.pendingAutoplay = Boolean(autoplay);
+}
+
+function applyPendingPlaybackRestore() {
+  if (state.pendingSeekTime === null) {
+    return;
+  }
+  const targetTime = state.pendingSeekTime;
+  const shouldAutoplay = state.pendingAutoplay;
+  state.pendingSeekTime = null;
+  state.pendingAutoplay = false;
+  if (targetTime > 0) {
+    elements.videoPlayer.currentTime = Math.min(targetTime, elements.videoPlayer.duration || targetTime);
+  }
+  if (shouldAutoplay) {
+    elements.videoPlayer.play().catch(() => undefined);
+  }
+}
+
+function scheduleHlsStatusPoll(delayMs = 1500) {
+  clearHlsPolling();
+  if (!state.currentVideo || state.hlsBlockedVideoId === state.currentVideo.id) {
+    return;
+  }
+  const playback = state.currentVideo.playback || {};
+  if (!canUseHlsPlayback() || playback.hls_state === "failed" || playback.hls_ready) {
+    return;
+  }
+  state.hlsPollTimer = window.setTimeout(() => {
+    pollHlsStatus().catch((error) => {
+      if (state.currentVideo) {
+        setStatus(elements.playbackInfo, `播放模式：Range 直读（轮询 HLS 状态失败：${error.message}）。`, true);
+      }
+      scheduleHlsStatusPoll(3000);
+    });
+  }, delayMs);
+}
+
+async function pollHlsStatus() {
+  if (!state.currentVideo) {
+    return;
+  }
+  const videoId = state.currentVideo.id;
+  const payload = await apiJson(`/api/videos/${encodeURIComponent(videoId)}/hls/status`);
+  if (!state.currentVideo || state.currentVideo.id !== videoId) {
+    return;
+  }
+  state.currentVideo.playback = payload.playback || state.currentVideo.playback;
+  updatePlaybackInfo();
+  if (state.currentVideo.playback?.hls_ready && state.activePlaybackMode !== "hls") {
+    const currentTime = elements.videoPlayer.currentTime || 0;
+    const autoplay = !elements.videoPlayer.paused;
+    await attachPlaybackSource({ preserveTime: currentTime, autoplay });
+    return;
+  }
+  scheduleHlsStatusPoll();
+}
+
+function attachRangePlayback({ preserveTime = 0, autoplay = false } = {}) {
+  if (!state.currentVideo) {
+    return;
+  }
+  destroyHlsController();
+  queuePlaybackRestore(preserveTime, autoplay);
+  state.activePlaybackMode = "range";
+  elements.videoPlayer.src = state.currentVideo.stream_url;
+  elements.videoPlayer.load();
+  updatePlaybackInfo();
+  scheduleHlsStatusPoll();
+}
+
+function attachNativeHlsPlayback(playback, { preserveTime = 0, autoplay = false } = {}) {
+  destroyHlsController();
+  clearHlsPolling();
+  queuePlaybackRestore(preserveTime, autoplay);
+  state.activePlaybackMode = "hls";
+  elements.videoPlayer.src = playback.hls_manifest_url;
+  elements.videoPlayer.load();
+  updatePlaybackInfo(playback);
+}
+
+function attachManagedHlsPlayback(playback, { preserveTime = 0, autoplay = false } = {}) {
+  destroyHlsController();
+  clearHlsPolling();
+  queuePlaybackRestore(preserveTime, autoplay);
+  state.activePlaybackMode = "hls";
+  elements.videoPlayer.removeAttribute("src");
+  elements.videoPlayer.load();
+
+  const hls = new window.Hls({
+    enableWorker: true,
+    backBufferLength: 90,
+    maxBufferLength: 30,
+    startFragPrefetch: true,
+  });
+  state.hlsController = hls;
+  hls.on(window.Hls.Events.MEDIA_ATTACHED, () => {
+    hls.loadSource(playback.hls_manifest_url);
+  });
+  hls.on(window.Hls.Events.ERROR, (_event, data) => {
+    if (!data?.fatal || !state.currentVideo) {
+      return;
+    }
+    const preserveTimeNow = elements.videoPlayer.currentTime || state.pendingSeekTime || 0;
+    const autoplayNow = !elements.videoPlayer.paused || state.pendingAutoplay;
+    state.hlsBlockedVideoId = state.currentVideo.id;
+    state.currentVideo.playback = {
+      ...(state.currentVideo.playback || {}),
+      hls_state: "failed",
+      hls_error: "浏览器端 HLS 播放失败，已自动回退到 Range。",
+      hls_ready: false,
+    };
+    attachRangePlayback({ preserveTime: preserveTimeNow, autoplay: autoplayNow });
+    updatePlaybackInfo(state.currentVideo.playback, true);
+  });
+  hls.attachMedia(elements.videoPlayer);
+  updatePlaybackInfo(playback);
+}
+
+async function attachPlaybackSource({ preserveTime = 0, autoplay = false } = {}) {
+  if (!state.currentVideo) {
+    return;
+  }
+  const playback = state.currentVideo.playback || {};
+  if (playback.hls_ready && state.hlsBlockedVideoId !== state.currentVideo.id) {
+    if (supportsNativeHls()) {
+      attachNativeHlsPlayback(playback, { preserveTime, autoplay });
+      return;
+    }
+    if (supportsManagedHls()) {
+      attachManagedHlsPlayback(playback, { preserveTime, autoplay });
+      return;
+    }
+  }
+  attachRangePlayback({ preserveTime, autoplay });
+}
+
 async function refreshVideos(preferredId = null) {
   const payload = await apiJson("/api/videos");
   state.videos = payload.videos || [];
@@ -112,6 +311,7 @@ async function refreshVideos(preferredId = null) {
     elements.videoSelect.disabled = true;
     elements.loadButton.disabled = true;
     setStatus(elements.videoInfo, "尚未上传视频。");
+    setStatus(elements.playbackInfo, "播放模式：未加载视频。");
     return;
   }
 
@@ -229,15 +429,23 @@ async function loadVideo(videoId) {
   state.roiPoints = fullFrameRoiPoints();
   state.annotation = annotations.annotation || { records: [] };
   state.unsaved = false;
-
-  elements.videoPlayer.src = state.currentVideo.stream_url;
-  elements.videoPlayer.load();
+  state.activePlaybackMode = null;
+  state.hlsBlockedVideoId = null;
+  state.pendingSeekTime = null;
+  state.pendingAutoplay = false;
+  clearHlsPolling();
+  destroyHlsController();
+  if (state.seekDebounceTimer) {
+    window.clearTimeout(state.seekDebounceTimer);
+    state.seekDebounceTimer = 0;
+  }
   elements.emptyState.style.display = "none";
   elements.outputDir.value = state.currentVideo.default_output_dir;
   elements.outputDir.disabled = false;
   elements.defaultDirButton.disabled = false;
   setControlsEnabled(true);
   updateVideoInfo();
+  updatePlaybackInfo();
   updateRoiInfo();
   drawRoiOverlay();
 
@@ -251,6 +459,7 @@ async function loadVideo(videoId) {
     elements.recordStatus,
     `已加载记录 ${annotations.record_count || 0} 条。JSON: ${annotations.json_path}`,
   );
+  await attachPlaybackSource();
 }
 
 function updateVideoInfo() {
@@ -330,13 +539,36 @@ function updateTimeline() {
   elements.timeLabel.textContent = `${formatSeconds(elements.videoPlayer.currentTime)} / ${formatSeconds(elements.videoPlayer.duration || state.currentVideo.metadata?.duration_seconds || 0)}`;
 }
 
-function seekToSlider() {
+function updateTimelinePreview(targetTime) {
+  const totalDuration = elements.videoPlayer.duration || state.currentVideo?.metadata?.duration_seconds || 0;
+  elements.timeLabel.textContent = `${formatSeconds(targetTime)} / ${formatSeconds(totalDuration)}`;
+}
+
+function seekToSlider(commit = false) {
   if (!state.currentVideo) {
     return;
   }
   elements.videoPlayer.pause();
-  elements.videoPlayer.currentTime = Number(elements.seekSlider.value) / getFps();
-  updateTimeline();
+  const targetTime = Number(elements.seekSlider.value) / getFps();
+  updateTimelinePreview(targetTime);
+  if (state.seekDebounceTimer) {
+    window.clearTimeout(state.seekDebounceTimer);
+    state.seekDebounceTimer = 0;
+  }
+  const applySeek = () => {
+    elements.videoPlayer.currentTime = targetTime;
+    if (commit) {
+      updateTimeline();
+    }
+  };
+  if (commit) {
+    applySeek();
+    return;
+  }
+  state.seekDebounceTimer = window.setTimeout(() => {
+    state.seekDebounceTimer = 0;
+    applySeek();
+  }, 90);
 }
 
 function getContentRect() {
@@ -615,7 +847,8 @@ function bindEvents() {
   elements.saveButton.addEventListener("click", saveAnnotations);
   elements.exportImagesButton.addEventListener("click", exportAnnotationImages);
   elements.defaultDirButton.addEventListener("click", useDefaultOutputDir);
-  elements.seekSlider.addEventListener("input", seekToSlider);
+  elements.seekSlider.addEventListener("input", () => seekToSlider(false));
+  elements.seekSlider.addEventListener("change", () => seekToSlider(true));
   elements.roiCanvas.addEventListener("click", handleCanvasClick);
   elements.videoPlayer.addEventListener("play", () => {
     elements.playButton.textContent = "暂停";
@@ -630,6 +863,7 @@ function bindEvents() {
     }
     updateTimeline();
     resizeCanvas();
+    applyPendingPlaybackRestore();
   });
   elements.videoPlayer.addEventListener("timeupdate", updateTimeline);
   elements.videoPlayer.addEventListener("seeked", updateTimeline);
@@ -650,6 +884,8 @@ function bindEvents() {
     }
   });
   window.addEventListener("pagehide", () => {
+    clearHlsPolling();
+    destroyHlsController();
     if (!state.currentVideo || !state.unsaved) {
       return;
     }

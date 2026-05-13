@@ -36,7 +36,7 @@
 
 ## Python 依赖
 
-桌面端与 WebApp 共用的 Python 包如下（原 `requirements.txt` 内容已合并于此）：
+桌面端与 WebApp 共用的 Python 包如下（同时写入仓库根目录 `requirements.txt`）：
 
 | 包名 |
 | --- |
@@ -49,5 +49,11 @@
 安装示例：
 
 ```bash
-python -m pip install PySide6 opencv-python numpy fastapi "uvicorn[standard]"
+python -m pip install -r requirements.txt
+```
+
+WebApp 的 HLS 流式播放还依赖系统 `ffmpeg`，该工具不是 Python 包，不能通过 `pip` 安装。建议使用：
+
+```bash
+conda install -c conda-forge ffmpeg
 ```

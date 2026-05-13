@@ -14,6 +14,7 @@ import os
 import re
 import shutil
 from datetime import datetime, timezone
+from email.utils import formatdate
 from pathlib import Path
 from typing import Any, Iterable, Optional
 from urllib.parse import quote
@@ -21,10 +22,11 @@ from urllib.parse import quote
 import cv2
 import numpy as np
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from webapp.range_utils import parse_byte_range_header
+from webapp.streaming_utils import HLS_PLAYLIST_NAME, ensure_hls_generation, hls_cache_dir
 
 
 WEBAPP_ROOT = Path(__file__).resolve().parent
@@ -32,6 +34,7 @@ STATIC_ROOT = WEBAPP_ROOT / "static"
 DATA_ROOT = Path(os.environ.get("VIDEO_EXTRACT_WEBAPP_DATA", WEBAPP_ROOT / "data")).resolve()
 VIDEOS_ROOT = DATA_ROOT / "videos"
 UPLOADS_ROOT = DATA_ROOT / "uploads"
+HLS_ROOT = DATA_ROOT / "hls"
 
 VIDEO_EXTENSIONS = {
     ".mp4",
@@ -45,6 +48,7 @@ VIDEO_EXTENSIONS = {
 UPLOAD_METADATA_SUFFIX = ".json"
 AUTOSAVE_SUFFIX = ".autosave.json"
 CHUNK_SIZE = 1024 * 1024
+HLS_SEGMENT_SECONDS = max(1, int(os.environ.get("VIDEO_EXTRACT_HLS_SEGMENT_SECONDS", "2")))
 UPLOAD_ID_PATTERN = re.compile(r"^[a-f0-9]{24}$")
 
 app = FastAPI(title="Video Extract WebApp", version="0.4")
@@ -163,7 +167,7 @@ def warp_roi_to_rectangle(
 
 @app.on_event("startup")
 def _ensure_data_directories() -> None:
-    for directory in (VIDEOS_ROOT, UPLOADS_ROOT):
+    for directory in (VIDEOS_ROOT, UPLOADS_ROOT, HLS_ROOT):
         directory.mkdir(parents=True, exist_ok=True)
 
 
@@ -174,6 +178,20 @@ def _flush_sessions_on_shutdown() -> None:
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _http_date(timestamp: float) -> str:
+    return formatdate(timestamp, usegmt=True)
+
+
+def _static_file_headers(path: Path, *, immutable: bool = False) -> dict[str, str]:
+    stat = path.stat()
+    max_age = 31536000 if immutable else 3600
+    return {
+        "Cache-Control": f"public, max-age={max_age}" + (", immutable" if immutable else ""),
+        "ETag": f"\"{stat.st_mtime_ns:x}-{stat.st_size:x}\"",
+        "Last-Modified": _http_date(stat.st_mtime),
+    }
 
 
 def _safe_filename(filename: str) -> str:
@@ -266,8 +284,33 @@ def _video_metadata(path: Path) -> dict[str, Any]:
     return metadata
 
 
-def _video_payload(path: Path) -> dict[str, Any]:
+def _streaming_payload(path: Path, metadata: dict[str, Any], prepare_stream: bool) -> dict[str, Any]:
+    stream_url = f"/api/videos/{quote(path.name)}/stream"
+    manifest_url = f"/api/videos/{quote(path.name)}/hls/{quote(HLS_PLAYLIST_NAME)}"
+    status_url = f"/api/videos/{quote(path.name)}/hls/status"
+    hls_status = ensure_hls_generation(
+        HLS_ROOT,
+        path,
+        fps=float(metadata.get("fps") or 0.0),
+        segment_seconds=HLS_SEGMENT_SECONDS,
+        start_build=prepare_stream,
+    )
+    return {
+        "mode": "hls" if hls_status["ready"] else "range",
+        "preferred_url": manifest_url if hls_status["ready"] else stream_url,
+        "range_url": stream_url,
+        "hls_manifest_url": manifest_url,
+        "hls_status_url": status_url,
+        "hls_state": hls_status["state"],
+        "hls_ready": bool(hls_status["ready"]),
+        "hls_error": hls_status.get("error"),
+        "updated_at": hls_status.get("updated_at"),
+    }
+
+
+def _video_payload(path: Path, *, prepare_stream: bool = False) -> dict[str, Any]:
     stat = path.stat()
+    metadata = _video_metadata(path)
     return {
         "id": path.name,
         "name": path.name,
@@ -275,10 +318,11 @@ def _video_payload(path: Path) -> dict[str, Any]:
         "size": stat.st_size,
         "mtime": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(),
         "stream_url": f"/api/videos/{quote(path.name)}/stream",
+        "playback": _streaming_payload(path, metadata, prepare_stream=prepare_stream),
         "default_output_dir": str(path.with_suffix("")),
         "json_path": str(path.with_suffix(".json")),
         "autosave_path": str(path.with_name(f"{path.stem}{AUTOSAVE_SUFFIX}")),
-        "metadata": _video_metadata(path),
+        "metadata": metadata,
     }
 
 
@@ -476,7 +520,7 @@ def list_videos() -> dict[str, Any]:
 
 @app.get("/api/videos/{video_id}")
 def get_video(video_id: str) -> dict[str, Any]:
-    return {"video": _video_payload(_video_path_from_id(video_id))}
+    return {"video": _video_payload(_video_path_from_id(video_id), prepare_stream=True)}
 
 
 def _file_iterator(path: Path, start: int, end: int) -> Iterable[bytes]:
@@ -491,16 +535,50 @@ def _file_iterator(path: Path, start: int, end: int) -> Iterable[bytes]:
             yield chunk
 
 
+def _hls_asset_path(video_path: Path, asset_name: str) -> Path:
+    safe_name = Path(asset_name).name
+    if safe_name != asset_name or not safe_name:
+        raise HTTPException(status_code=400, detail="HLS 资源路径无效")
+    cache_dir = hls_cache_dir(HLS_ROOT, video_path).resolve()
+    asset_path = (cache_dir / safe_name).resolve()
+    if asset_path.parent != cache_dir:
+        raise HTTPException(status_code=400, detail="HLS 资源路径无效")
+    return asset_path
+
+
+@app.get("/api/videos/{video_id}/hls/status")
+def get_video_hls_status(video_id: str) -> dict[str, Any]:
+    video_path = _video_path_from_id(video_id)
+    metadata = _video_metadata(video_path)
+    return {"playback": _streaming_payload(video_path, metadata, prepare_stream=True)}
+
+
+@app.get("/api/videos/{video_id}/hls/{asset_name}")
+def get_video_hls_asset(video_id: str, asset_name: str):
+    video_path = _video_path_from_id(video_id)
+    asset_path = _hls_asset_path(video_path, asset_name)
+    if not asset_path.exists():
+        metadata = _video_metadata(video_path)
+        _streaming_payload(video_path, metadata, prepare_stream=True)
+        raise HTTPException(status_code=404, detail="HLS 缓存尚未准备好，请稍后重试")
+
+    immutable = asset_path.suffix != ".m3u8"
+    headers = _static_file_headers(asset_path, immutable=immutable)
+    media_type = mimetypes.guess_type(asset_path.name)[0] or "application/octet-stream"
+    return FileResponse(asset_path, media_type=media_type, headers=headers)
+
+
 @app.get("/api/videos/{video_id}/stream")
 def stream_video(video_id: str, request: Request):
     path = _video_path_from_id(video_id)
     file_size = path.stat().st_size
     media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
     range_header = request.headers.get("range")
+    base_headers = _static_file_headers(path)
+    if request.headers.get("if-none-match") == base_headers["ETag"] and not range_header:
+        return Response(status_code=304, headers=base_headers)
     if not range_header:
-        response = FileResponse(path, media_type=media_type)
-        response.headers["Accept-Ranges"] = "bytes"
-        return response
+        return FileResponse(path, media_type=media_type, headers={**base_headers, "Accept-Ranges": "bytes"})
 
     try:
         start, end = parse_byte_range_header(range_header, file_size)
@@ -508,6 +586,7 @@ def stream_video(video_id: str, request: Request):
         raise HTTPException(status_code=416, detail=str(exc)) from exc
 
     headers = {
+        **base_headers,
         "Accept-Ranges": "bytes",
         "Content-Range": f"bytes {start}-{end}/{file_size}",
         "Content-Length": str(end - start + 1),
