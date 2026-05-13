@@ -490,6 +490,33 @@ def _file_iterator(path: Path, start: int, end: int) -> Iterable[bytes]:
             yield chunk
 
 
+def _resolve_byte_range(range_header: str, file_size: int) -> tuple[int, int]:
+    """Parse a single HTTP byte range, including suffix ranges like ``bytes=-65536``."""
+
+    try:
+        unit, value = range_header.split("=", 1)
+        if unit.strip().lower() != "bytes":
+            raise ValueError
+        if "," in value:
+            raise ValueError
+        start_text, end_text = value.split("-", 1)
+        if start_text:
+            start = int(start_text)
+            end = int(end_text) if end_text else file_size - 1
+        else:
+            suffix_length = int(end_text)
+            if suffix_length <= 0:
+                raise ValueError
+            start = max(file_size - suffix_length, 0)
+            end = file_size - 1
+    except ValueError as exc:
+        raise HTTPException(status_code=416, detail="Range 请求无效") from exc
+
+    if start < 0 or end < start or start >= file_size:
+        raise HTTPException(status_code=416, detail="Range 请求超出文件大小")
+    return start, min(end, file_size - 1)
+
+
 @app.get("/api/videos/{video_id}/stream")
 def stream_video(video_id: str, request: Request):
     path = _video_path_from_id(video_id)
@@ -497,23 +524,11 @@ def stream_video(video_id: str, request: Request):
     media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
     range_header = request.headers.get("range")
     if not range_header:
-        response = FileResponse(path, media_type=media_type, filename=path.name)
+        response = FileResponse(path, media_type=media_type)
         response.headers["Accept-Ranges"] = "bytes"
         return response
 
-    try:
-        unit, value = range_header.split("=", 1)
-        if unit.strip().lower() != "bytes":
-            raise ValueError
-        start_text, end_text = value.split("-", 1)
-        start = int(start_text) if start_text else 0
-        end = int(end_text) if end_text else file_size - 1
-    except ValueError as exc:
-        raise HTTPException(status_code=416, detail="Range 请求无效") from exc
-
-    if start < 0 or end < start or start >= file_size:
-        raise HTTPException(status_code=416, detail="Range 请求超出文件大小")
-    end = min(end, file_size - 1)
+    start, end = _resolve_byte_range(range_header, file_size)
     headers = {
         "Accept-Ranges": "bytes",
         "Content-Range": f"bytes {start}-{end}/{file_size}",
