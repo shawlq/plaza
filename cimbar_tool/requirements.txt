@@ -1,0 +1,9 @@
+# Python dependencies for cimbar_tool.
+#
+# The batch encoder currently uses only the Python standard library, so this
+# file is intentionally empty and remains safe to install with:
+#   python -m pip install -r requirements.txt
+#
+# External runtime dependency:
+# - libcimbar command line encoder (cimbar.exe on Windows)
+#   https://github.com/sz3/libcimbar
