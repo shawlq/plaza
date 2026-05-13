@@ -10,11 +10,11 @@
 cd video_extract
 python -m venv .venv
 .venv\Scripts\activate
-python -m pip install PySide6 opencv-python numpy fastapi "uvicorn[standard]"
+python -m pip install -r requirements.txt
 python main.py
 ```
 
-也可以在 Windows 资源管理器中双击 `run_windows.bat` 安装依赖并启动。依赖清单见 `docs/release_notes.md` 中的「Python 依赖」。
+也可以在 Windows 资源管理器中双击 `run_windows.bat` 安装依赖并启动。依赖清单见 `requirements.txt` 与 `docs/release_notes.md` 中的「Python 依赖」。
 
 ## WebApp
 
@@ -22,7 +22,9 @@ WebApp 位于 `webapp/`，后端使用 FastAPI，前端为静态 HTML/CSS/JavaSc
 
 ```bash
 cd video_extract
-python -m pip install PySide6 opencv-python numpy fastapi "uvicorn[standard]"
+python -m pip install -r requirements.txt
+# HLS 流式播放额外依赖系统 ffmpeg，建议使用：
+# conda install -c conda-forge ffmpeg
 python -m uvicorn webapp.app:app --host 0.0.0.0 --port 8000
 ```
 
