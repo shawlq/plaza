@@ -24,6 +24,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from webapp.range_utils import parse_byte_range_header
 
 
 WEBAPP_ROOT = Path(__file__).resolve().parent
@@ -497,23 +498,15 @@ def stream_video(video_id: str, request: Request):
     media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
     range_header = request.headers.get("range")
     if not range_header:
-        response = FileResponse(path, media_type=media_type, filename=path.name)
+        response = FileResponse(path, media_type=media_type)
         response.headers["Accept-Ranges"] = "bytes"
         return response
 
     try:
-        unit, value = range_header.split("=", 1)
-        if unit.strip().lower() != "bytes":
-            raise ValueError
-        start_text, end_text = value.split("-", 1)
-        start = int(start_text) if start_text else 0
-        end = int(end_text) if end_text else file_size - 1
+        start, end = parse_byte_range_header(range_header, file_size)
     except ValueError as exc:
-        raise HTTPException(status_code=416, detail="Range 请求无效") from exc
+        raise HTTPException(status_code=416, detail=str(exc)) from exc
 
-    if start < 0 or end < start or start >= file_size:
-        raise HTTPException(status_code=416, detail="Range 请求超出文件大小")
-    end = min(end, file_size - 1)
     headers = {
         "Accept-Ranges": "bytes",
         "Content-Range": f"bytes {start}-{end}/{file_size}",
