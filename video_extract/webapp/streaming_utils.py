@@ -15,6 +15,7 @@ from typing import Any
 HLS_PLAYLIST_NAME = "playlist.m3u8"
 HLS_STATUS_NAME = "status.json"
 HLS_LOG_NAME = "ffmpeg.log"
+FFMPEG_MISSING_REASON = "ffmpeg_missing"
 
 _HLS_BUILD_LOCK = threading.Lock()
 _HLS_BUILDERS: dict[str, threading.Thread] = {}
@@ -60,14 +61,30 @@ def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
     temp_path.replace(path)
 
 
-def _failed_status_payload(video_path: Path, output_dir: Path, error: str) -> dict[str, Any]:
-    return {
+def _failed_status_payload(
+    video_path: Path,
+    output_dir: Path,
+    error: str,
+    *,
+    reason_code: str | None = None,
+) -> dict[str, Any]:
+    payload = {
         "state": "failed",
         "error": error,
         "updated_at": _utc_now(),
         "source_name": video_path.name,
         "cache_dir": str(output_dir),
     }
+    if reason_code:
+        payload["reason_code"] = reason_code
+    return payload
+
+
+def _is_retryable_ffmpeg_missing_failure(status: dict[str, Any]) -> bool:
+    return status.get("state") == "failed" and (
+        status.get("reason_code") == FFMPEG_MISSING_REASON
+        or "未找到 ffmpeg" in str(status.get("error") or "")
+    )
 
 
 def _read_status(path: Path) -> dict[str, Any] | None:
@@ -203,6 +220,7 @@ def _build_hls_playlist(
                 video_path,
                 output_dir,
                 f"HLS 不可用：未找到 ffmpeg，可安装 ffmpeg 或设置 VIDEO_EXTRACT_FFMPEG_BIN 指向可执行文件。",
+                reason_code=FFMPEG_MISSING_REASON,
             ),
         )
         return
@@ -247,7 +265,7 @@ def ensure_hls_generation(
     start_build: bool,
 ) -> dict[str, Any]:
     status = read_hls_status(cache_root, video_path)
-    if status["state"] in {"ready", "failed"} or not start_build:
+    if status["state"] == "ready" or not start_build:
         return status
 
     if not ffmpeg_available():
@@ -259,9 +277,27 @@ def ensure_hls_generation(
                 video_path,
                 output_dir,
                 "HLS 不可用：未找到 ffmpeg，可安装 ffmpeg 或设置 VIDEO_EXTRACT_FFMPEG_BIN 指向可执行文件。",
+                reason_code=FFMPEG_MISSING_REASON,
             ),
         )
         return read_hls_status(cache_root, video_path)
+
+    if status["state"] == "failed":
+        if not _is_retryable_ffmpeg_missing_failure(status):
+            return status
+        status_path = hls_status_path(cache_root, video_path)
+        output_dir = hls_cache_dir(cache_root, video_path)
+        _write_json_atomic(
+            status_path,
+            {
+                "state": "missing",
+                "error": None,
+                "updated_at": _utc_now(),
+                "source_name": video_path.name,
+                "cache_dir": str(output_dir),
+            },
+        )
+        status = read_hls_status(cache_root, video_path)
 
     key = str(hls_playlist_path(cache_root, video_path))
     with _HLS_BUILD_LOCK:

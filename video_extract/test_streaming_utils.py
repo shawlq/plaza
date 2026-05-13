@@ -19,6 +19,9 @@ from webapp.streaming_utils import (
 
 
 class StreamingUtilsTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._thread_starts: list[object] = []
+
     def test_video_cache_key_is_stable_length(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             video_path = Path(temp_dir) / "demo.mp4"
@@ -100,6 +103,38 @@ class StreamingUtilsTests(unittest.TestCase):
             self.assertEqual(status["state"], "failed")
             self.assertFalse(status["ready"])
             self.assertIn("ffmpeg", status["error"])
+
+    def test_ensure_hls_generation_retries_after_ffmpeg_becomes_available(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_root = Path(temp_dir) / "cache"
+            video_path = Path(temp_dir) / "demo.mp4"
+            video_path.write_bytes(b"x")
+
+            with patch("webapp.streaming_utils.shutil.which", return_value=None):
+                status = ensure_hls_generation(cache_root, video_path, fps=24.0, segment_seconds=2, start_build=True)
+            self.assertEqual(status["state"], "failed")
+
+            started_threads = self._thread_starts
+
+            class FakeThread:
+                def __init__(self, *args, **kwargs) -> None:
+                    self.started = False
+
+                def start(self) -> None:
+                    self.started = True
+                    started_threads.append(self)
+
+                def is_alive(self) -> bool:
+                    return self.started
+
+            with patch("webapp.streaming_utils.shutil.which", return_value="/usr/bin/ffmpeg"), patch(
+                "webapp.streaming_utils.threading.Thread",
+                side_effect=FakeThread,
+            ):
+                retry_status = ensure_hls_generation(cache_root, video_path, fps=24.0, segment_seconds=2, start_build=True)
+
+            self.assertEqual(retry_status["state"], "missing")
+            self.assertEqual(len(self._thread_starts), 1)
 
 
 if __name__ == "__main__":
