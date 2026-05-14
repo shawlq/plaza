@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from shuttle_tool.common.git_client import GitShuttle, GitShuttleError
+from shuttle_tool.common.shuttle_env import linux_env_dir, try_apply_env_dir
 
 
 def _print_help() -> None:
@@ -17,7 +18,7 @@ def _print_help() -> None:
   shuttle -h | --help        显示本帮助
   shuttle help               显示本帮助
 
-环境变量由 install.sh 写入 ~/.shuttle.info，或在当前 shell 中手动 export。
+环境变量来自 shuttle_tool/linux/.shuttle.env/config（由 install.sh 生成），或由当前 shell export。
 未配置时请先运行 shuttle_tool/linux/install.sh。
 """
     )
@@ -28,7 +29,7 @@ def _recv() -> int:
         shuttle = GitShuttle.from_env()
     except GitShuttleError as e:
         print(str(e), file=sys.stderr)
-        print("提示: 可运行 shuttle_tool/linux/install.sh 生成本机 ~/.shuttle.info。", file=sys.stderr)
+        print("提示: 请运行 shuttle_tool/linux/install.sh 或配置 linux/.shuttle.env/config。", file=sys.stderr)
         return 1
     try:
         text = shuttle.receive_text()
@@ -46,7 +47,7 @@ def _send_body(body: str) -> int:
         shuttle = GitShuttle.from_env()
     except GitShuttleError as e:
         print(str(e), file=sys.stderr)
-        print("提示: 可运行 shuttle_tool/linux/install.sh 生成本机 ~/.shuttle.info。", file=sys.stderr)
+        print("提示: 请运行 shuttle_tool/linux/install.sh 或配置 linux/.shuttle.env/config。", file=sys.stderr)
         return 1
     try:
         shuttle.send_text(body)
@@ -66,6 +67,7 @@ def _send_path(path: Path) -> int:
 
 
 def main() -> int:
+    try_apply_env_dir(linux_env_dir())
     argv = sys.argv[1:]
     if not argv:
         return _recv()

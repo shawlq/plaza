@@ -1,5 +1,6 @@
 __pycache__
 test/
 
-# shuttle_tool 本地安装配置（install.sh 通常写入 $HOME/.shuttle.info；若在仓库根误建同名文件也不提交）
-.shuttle.info
+# shuttle_tool 本地配置目录（勿提交）
+shuttle_tool/win/.shuttle.env/
+shuttle_tool/linux/.shuttle.env/

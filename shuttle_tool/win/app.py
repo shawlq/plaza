@@ -16,25 +16,108 @@ import tkinter as tk
 from tkinter import messagebox, scrolledtext
 
 from shuttle_tool.common.git_client import GitShuttle, GitShuttleError
+from shuttle_tool.common.shuttle_env import save_env_dir, try_apply_env_dir, win_env_dir
 
 
 def _load_shuttle() -> GitShuttle:
     return GitShuttle.from_env()
 
 
-def main() -> None:
-    if not os.environ.get("SHUTTLE_REPO_ROOT", "").strip():
-        root = tk.Tk()
-        root.withdraw()
-        init_bat = Path(__file__).resolve().parent / "init_env_val.bat"
-        messagebox.showerror(
-            "配置错误",
-            "未设置环境变量 SHUTTLE_REPO_ROOT。\n\n"
-            f"请先编辑并运行 init_env_val.bat：\n{init_bat}\n\n"
-            "（在该脚本中为 SHUTTLE_REPO_ROOT 赋值后，于同一 CMD 窗口执行该脚本，再启动本程序。）",
+def _show_first_run_config(env_dir: Path) -> bool:
+    root = tk.Tk()
+    root.title("首次配置 — Git 文本穿梭")
+    root.geometry("560x300")
+    root.resizable(True, False)
+
+    var_root = tk.StringVar()
+    var_url = tk.StringVar()
+    var_payload = tk.StringVar()
+    var_remote = tk.StringVar(value="origin")
+    var_branch = tk.StringVar()
+
+    frm = tk.Frame(root, padx=10, pady=10)
+    frm.pack(fill=tk.BOTH, expand=True)
+
+    row = 0
+
+    def add_row(label: str, var: tk.StringVar) -> None:
+        nonlocal row
+        tk.Label(frm, text=label).grid(row=row, column=0, sticky=tk.W, pady=4)
+        tk.Entry(frm, textvariable=var, width=58).grid(row=row, column=1, sticky=tk.EW, pady=4)
+        row += 1
+
+    add_row("本地仓库根目录（必填）", var_root)
+    add_row("远程 HTTP(S) 地址（可选）", var_url)
+    add_row("载荷相对路径（可选）", var_payload)
+    add_row("远程名（可选）", var_remote)
+    add_row("分支名（可选）", var_branch)
+    frm.grid_columnconfigure(1, weight=1)
+
+    ok_flag = False
+
+    def on_ok() -> None:
+        nonlocal ok_flag
+        raw = var_root.get().strip()
+        if not raw:
+            messagebox.showerror("配置", "请填写本地仓库根目录。")
+            return
+        try:
+            p = Path(raw).expanduser().resolve()
+        except OSError:
+            messagebox.showerror("配置", "路径无效。")
+            return
+        if not p.is_dir():
+            messagebox.showerror("配置", "该路径不是文件夹。")
+            return
+        if not (p / ".git").exists():
+            if not messagebox.askyesno("配置", "该路径下未发现 .git，是否仍要继续？"):
+                return
+        data: dict[str, str] = {"SHUTTLE_REPO_ROOT": str(p)}
+        u = var_url.get().strip()
+        if u:
+            data["SHUTTLE_REPO_URL"] = u
+        pl = var_payload.get().strip()
+        if pl:
+            data["SHUTTLE_PAYLOAD_REL"] = pl
+        rem = var_remote.get().strip()
+        if rem:
+            data["SHUTTLE_REMOTE"] = rem
+        br = var_branch.get().strip()
+        if br:
+            data["SHUTTLE_BRANCH"] = br
+        save_env_dir(
+            env_dir,
+            data,
+            header="# shuttle_tool Windows 本地配置 — 勿提交到 Git 仓库",
         )
+        for k, v in data.items():
+            os.environ[k] = v
+        ok_flag = True
+        root.destroy()
+
+    def on_cancel() -> None:
+        root.destroy()
+
+    btns = tk.Frame(frm)
+    btns.grid(row=row, column=0, columnspan=2, pady=(14, 0))
+    tk.Button(btns, text="确定", command=on_ok, width=10).pack(side=tk.LEFT, padx=6)
+    tk.Button(btns, text="取消", command=on_cancel, width=10).pack(side=tk.LEFT, padx=6)
+
+    root.mainloop()
+    return ok_flag
+
+
+def _ensure_win_config(env_dir: Path) -> bool:
+    try_apply_env_dir(env_dir)
+    if os.environ.get("SHUTTLE_REPO_ROOT", "").strip():
+        return True
+    return _show_first_run_config(env_dir)
+
+
+def main() -> None:
+    env_dir = win_env_dir()
+    if not _ensure_win_config(env_dir):
         sys.exit(1)
-        return
 
     try:
         shuttle = _load_shuttle()
