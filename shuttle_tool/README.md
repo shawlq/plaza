@@ -41,13 +41,22 @@ python shuttle_tool\win\app.py
 
 ## Linux（命令行）
 
-### 安装为系统命令 `shuttle`（推荐）
+### 安装为命令 `shuttle`（推荐）
 
 ```bash
 bash shuttle_tool/linux/install.sh
 ```
 
-默认 `PREFIX=/usr/local`；无 root 时可 `PREFIX=$HOME/.local`，并确保 `$HOME/.local/bin` 在 `PATH` 中。安装脚本会 `chown` 配置目录以便当前用户向其中执行 `git clone`。
+- **默认安装前缀**：非 root 为 **`$HOME/.local`**（可执行文件在 `$HOME/.local/bin/shuttle`）；root 为 **`/usr/local`**。也可用 `bash shuttle_tool/linux/install.sh --prefix ~/.local` 或环境变量 `PREFIX=...`。
+- **PATH**：默认在「真实用户」的 **`~/.bashrc`** 中追加一行 `export PATH="<安装前缀>/bin:$PATH"`（带注释标记，新开终端生效）；若当前 `PATH` 已包含该目录则跳过。不需要改 PATH 时加 **`--no-path-snippet`**。
+- **卸载**：`bash shuttle_tool/linux/install.sh --uninstall` 会读取 **`~/.local/share/shuttle/install.paths`**，执行 **`rm -rf <prefix>/lib/shuttle`**、**`rm -f <prefix>/bin/shuttle`**，删除记录文件，并在安装时曾写入 PATH 片段时从 `~/.bashrc` 移除对应标记块。若无记录文件，可用 **`--uninstall --prefix ~/.local`**（或其它前缀）指定删除目标。
+- 安装到 **`/usr/*`、`/opt/*`** 且当前非 root 时，脚本会通过 **`sudo`** 复制文件；`git clone` 在 `sudo` 场景下会以 **`SUDO_USER`** 身份执行，并把 `linux/.shuttle.env` 目录属主改为该用户以便克隆。
+
+完整参数说明：
+
+```bash
+bash shuttle_tool/linux/install.sh --help
+```
 
 ```text
 shuttle                    # 接收
@@ -75,4 +84,4 @@ python3 -m shuttle_tool.linux.cli receive
 
 - `common/`：`GitShuttle`、`shuttle_env`（`try_apply_env_dir`、`ensure_repo_cloned` 等）。
 - `win/`：`app.py`；本地克隆 `win/.shuttle.env/repo/`。
-- `linux/`：`cli.py`、`shuttle_cmd.py`、`install.sh`；本地克隆 `linux/.shuttle.env/repo/`。
+- `linux/`：`cli.py`、`shuttle_cmd.py`、`install.sh`（支持 `--help`、`--uninstall`、`--prefix`、`--no-path-snippet`）；本地克隆 `linux/.shuttle.env/repo/`。
