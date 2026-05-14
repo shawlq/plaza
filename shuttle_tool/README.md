@@ -19,7 +19,9 @@
 
 ## Windows（图形界面）
 
-在**仓库根目录**（含 `shuttle_tool` 包的那一层）打开终端，设置 `SHUTTLE_REPO_ROOT` 指向本机 clone 根路径（通常就是当前仓库根），然后：
+在**仓库根目录**（含 `shuttle_tool` 包的那一层）打开 CMD。推荐先编辑并运行 [`shuttle_tool/win/init_env_val.bat`](shuttle_tool/win/init_env_val.bat)：在其中的 `set "SHUTTLE_REPO_ROOT=..."` 填写本机 Git clone 根目录后执行，以设置当前窗口的 `SHUTTLE_REPO_ROOT`（仅对本 CMD 窗口生效）。若未设置该变量就启动程序，会提示你执行上述脚本。
+
+也可手动：
 
 ```bat
 set SHUTTLE_REPO_ROOT=C:\path\to\your\clone
@@ -29,6 +31,27 @@ python shuttle_tool\win\app.py
 界面：上方为可编辑发送区，下方为只读接收区；按钮「发送」「接收」对应 `send_text` / `receive_text`。长时间 Git 操作在后台线程执行，避免界面卡死。
 
 ## Linux（命令行）
+
+### 安装为系统命令 `shuttle`（推荐）
+
+在仓库中执行（默认安装到 `/usr/local`；无 root 时可使用 `PREFIX=$HOME/.local`，并确保 `$HOME/.local/bin` 在 `PATH` 中）：
+
+```bash
+bash shuttle_tool/linux/install.sh
+```
+
+安装脚本会交互询问 `SHUTTLE_REPO_ROOT` 等变量，并写入 **`$HOME/.shuttle.info`**（本地配置，**勿提交**；仓库根 [`.gitignore`](.gitignore) 已忽略 `.shuttle.info` 以防误放在仓库内）。
+
+安装后的用法：
+
+```text
+shuttle                    # 接收：pull 后打印载荷
+shuttle 要发送的正文        # 发送：多词会以空格连接
+shuttle /path/to/file.txt  # 发送：唯一参数为已存在文件路径时，发送文件内容
+shuttle -h                 # 或 shuttle --help / shuttle help：帮助
+```
+
+### 不安装、直接用 Python 模块
 
 同样在仓库根执行（或确保 `PYTHONPATH` 含仓库根）：
 
@@ -59,5 +82,5 @@ python shuttle_tool/linux/cli.py receive
 ## 目录说明
 
 - `common/`：`GitShuttle`（`pull` / `send_text` / `receive_text`），供 Win / Linux 调用。
-- `win/`：Tkinter 图形入口 `app.py`。
-- `linux/`：命令行入口 `cli.py`。
+- `win/`：Tkinter 图形入口 `app.py`；`init_env_val.bat` 用于在本机 CMD 中设置 `SHUTTLE_REPO_ROOT`。
+- `linux/`：`cli.py`（`send` / `receive` 子命令）、`shuttle_cmd.py`（安装后的 `shuttle` 入口）、`install.sh`（安装脚本）。

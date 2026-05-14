@@ -41,6 +41,11 @@ def main() -> int:
         shuttle = GitShuttle.from_env()
     except GitShuttleError as e:
         print(str(e), file=sys.stderr)
+        print(
+            "提示: 可运行 shuttle_tool/linux/install.sh 安装并生成 ~/.shuttle.info，"
+            "或手动 export SHUTTLE_REPO_ROOT=...",
+            file=sys.stderr,
+        )
         return 1
 
     try:

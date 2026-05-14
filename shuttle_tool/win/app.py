@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import threading
 from pathlib import Path
@@ -22,6 +23,19 @@ def _load_shuttle() -> GitShuttle:
 
 
 def main() -> None:
+    if not os.environ.get("SHUTTLE_REPO_ROOT", "").strip():
+        root = tk.Tk()
+        root.withdraw()
+        init_bat = Path(__file__).resolve().parent / "init_env_val.bat"
+        messagebox.showerror(
+            "配置错误",
+            "未设置环境变量 SHUTTLE_REPO_ROOT。\n\n"
+            f"请先编辑并运行 init_env_val.bat：\n{init_bat}\n\n"
+            "（在该脚本中为 SHUTTLE_REPO_ROOT 赋值后，于同一 CMD 窗口执行该脚本，再启动本程序。）",
+        )
+        sys.exit(1)
+        return
+
     try:
         shuttle = _load_shuttle()
     except GitShuttleError as e:
