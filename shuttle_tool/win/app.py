@@ -13,10 +13,51 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 import tkinter as tk
+import tkinter.font as tkfont
 from tkinter import messagebox, scrolledtext
 
 from shuttle_tool.common.git_client import GitShuttle, GitShuttleError
 from shuttle_tool.common.shuttle_env import ShuttleEnvError, save_env_dir, try_apply_env_dir, win_env_dir
+
+_GEOM_FILE = "window_geometry.txt"
+
+
+def _load_saved_geometry(env_dir: Path) -> str | None:
+    path = env_dir / _GEOM_FILE
+    if not path.is_file():
+        return None
+    for line in path.read_text(encoding="utf-8").splitlines():
+        s = line.strip()
+        if s and not s.startswith("#"):
+            return s
+    return None
+
+
+def _save_window_geometry(env_dir: Path, root: tk.Tk) -> None:
+    try:
+        root.update_idletasks()
+        geom = root.winfo_geometry()
+        if not geom:
+            return
+        env_dir.mkdir(parents=True, exist_ok=True)
+        (env_dir / _GEOM_FILE).write_text(
+            "# shuttle_tool 主窗口 geometry（勿提交到 Git）\n" + geom + "\n",
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
+
+
+def _apply_smaller_fonts(_root: tk.Tk) -> None:
+    """略缩小默认与等宽字体（正号 point 尺寸）。"""
+    try:
+        for name in ("TkDefaultFont", "TkTextFont", "TkFixedFont"):
+            f = tkfont.nametofont(name)
+            sz = f.cget("size")
+            if isinstance(sz, int) and sz > 0:
+                f.configure(size=max(8, sz - 2))
+    except (tk.TclError, OSError, ValueError):
+        pass
 
 
 def _load_shuttle() -> GitShuttle:
@@ -165,29 +206,31 @@ def main() -> None:
 
     root = tk.Tk()
     root.title("Git 文本穿梭 (shuttle_tool)")
-    root.geometry("720x520")
+    _apply_smaller_fonts(root)
+    saved = _load_saved_geometry(env_dir)
+    root.geometry(saved if saved else "720x520")
 
-    frm = tk.Frame(root, padx=8, pady=8)
+    frm = tk.Frame(root, padx=6, pady=6)
     frm.pack(fill=tk.BOTH, expand=True)
 
-    tk.Label(frm, text="发送（可编辑）").pack(anchor=tk.W)
-    send_box = scrolledtext.ScrolledText(frm, height=12, wrap=tk.WORD)
-    send_box.pack(fill=tk.BOTH, expand=True, pady=(0, 8))
-
-    tk.Label(frm, text="接收（只读）").pack(anchor=tk.W)
-    recv_box = scrolledtext.ScrolledText(frm, height=12, wrap=tk.WORD, state=tk.DISABLED)
-    recv_box.pack(fill=tk.BOTH, expand=True, pady=(0, 8))
-
     btn_row = tk.Frame(frm)
-    btn_row.pack(fill=tk.X)
+    btn_row.pack(fill=tk.X, pady=(0, 6))
 
-    send_btn = tk.Button(btn_row, text="发送", width=12)
-    recv_btn = tk.Button(btn_row, text="接收", width=12)
+    send_btn = tk.Button(btn_row, text="发送", width=10)
+    recv_btn = tk.Button(btn_row, text="接收", width=10)
     send_btn.pack(side=tk.LEFT, padx=(0, 8))
     recv_btn.pack(side=tk.LEFT)
 
     status = tk.StringVar(value=f"仓库: {shuttle.repo_root}")
-    tk.Label(frm, textvariable=status, fg="gray").pack(anchor=tk.W, pady=(4, 0))
+    tk.Label(frm, textvariable=status, fg="gray").pack(anchor=tk.W, pady=(0, 6))
+
+    tk.Label(frm, text="发送（可编辑）").pack(anchor=tk.W)
+    send_box = scrolledtext.ScrolledText(frm, height=11, wrap=tk.WORD)
+    send_box.pack(fill=tk.BOTH, expand=True, pady=(0, 6))
+
+    tk.Label(frm, text="接收（只读）").pack(anchor=tk.W)
+    recv_box = scrolledtext.ScrolledText(frm, height=11, wrap=tk.WORD, state=tk.DISABLED)
+    recv_box.pack(fill=tk.BOTH, expand=True, pady=(0, 0))
 
     def set_recv_text(content: str) -> None:
         recv_box.configure(state=tk.NORMAL)
@@ -248,6 +291,12 @@ def main() -> None:
 
     send_btn.configure(command=do_send)
     recv_btn.configure(command=do_recv)
+
+    def _on_close() -> None:
+        _save_window_geometry(env_dir, root)
+        root.destroy()
+
+    root.protocol("WM_DELETE_WINDOW", _on_close)
 
     root.mainloop()
 
