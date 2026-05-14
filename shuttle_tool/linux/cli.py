@@ -12,7 +12,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from shuttle_tool.common.git_client import GitShuttle, GitShuttleError
-from shuttle_tool.common.shuttle_env import linux_env_dir, try_apply_env_dir
+from shuttle_tool.common.shuttle_env import ShuttleEnvError, linux_env_dir, try_apply_env_dir
 
 
 def _read_send_body(args: argparse.Namespace) -> str:
@@ -23,7 +23,16 @@ def _read_send_body(args: argparse.Namespace) -> str:
 
 
 def main() -> int:
-    try_apply_env_dir(linux_env_dir())
+    try:
+        try_apply_env_dir(linux_env_dir())
+    except ShuttleEnvError as e:
+        print(str(e), file=sys.stderr)
+        print(
+            "提示: 请检查 shuttle_tool/linux/.shuttle.env/config 中的 SHUTTLE_REPO_URL，"
+            "或重新运行 shuttle_tool/linux/install.sh。",
+            file=sys.stderr,
+        )
+        return 1
 
     parser = argparse.ArgumentParser(description="通过 Git 仓库收发文本（需配置 SHUTTLE_REPO_ROOT）")
     sub = parser.add_subparsers(dest="cmd", required=True)

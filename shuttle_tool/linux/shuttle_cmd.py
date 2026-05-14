@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 from shuttle_tool.common.git_client import GitShuttle, GitShuttleError
-from shuttle_tool.common.shuttle_env import linux_env_dir, try_apply_env_dir
+from shuttle_tool.common.shuttle_env import ShuttleEnvError, linux_env_dir, try_apply_env_dir
 
 
 def _print_help() -> None:
@@ -67,16 +67,21 @@ def _send_path(path: Path) -> int:
 
 
 def main() -> int:
-    try_apply_env_dir(linux_env_dir())
     argv = sys.argv[1:]
-    if not argv:
-        return _recv()
     if argv and argv[0] in ("-h", "--help"):
         _print_help()
         return 0
     if len(argv) == 1 and argv[0] == "help":
         _print_help()
         return 0
+    try:
+        try_apply_env_dir(linux_env_dir())
+    except ShuttleEnvError as e:
+        print(str(e), file=sys.stderr)
+        print("提示: 请检查 linux/.shuttle.env/config 或重新运行 install.sh。", file=sys.stderr)
+        return 1
+    if not argv:
+        return _recv()
     if len(argv) == 1:
         p = Path(argv[0]).expanduser()
         try:

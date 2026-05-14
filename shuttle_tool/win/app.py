@@ -16,21 +16,26 @@ import tkinter as tk
 from tkinter import messagebox, scrolledtext
 
 from shuttle_tool.common.git_client import GitShuttle, GitShuttleError
-from shuttle_tool.common.shuttle_env import save_env_dir, try_apply_env_dir, win_env_dir
+from shuttle_tool.common.shuttle_env import ShuttleEnvError, save_env_dir, try_apply_env_dir, win_env_dir
 
 
 def _load_shuttle() -> GitShuttle:
     return GitShuttle.from_env()
 
 
+def _is_http_url(s: str) -> bool:
+    t = s.strip().lower()
+    return t.startswith("http://") or t.startswith("https://")
+
+
 def _show_first_run_config(env_dir: Path) -> bool:
     root = tk.Tk()
     root.title("首次配置 — Git 文本穿梭")
-    root.geometry("560x300")
+    root.geometry("580x320")
     root.resizable(True, False)
 
-    var_root = tk.StringVar()
     var_url = tk.StringVar()
+    var_clone_branch = tk.StringVar()
     var_payload = tk.StringVar()
     var_remote = tk.StringVar(value="origin")
     var_branch = tk.StringVar()
@@ -43,39 +48,40 @@ def _show_first_run_config(env_dir: Path) -> bool:
     def add_row(label: str, var: tk.StringVar) -> None:
         nonlocal row
         tk.Label(frm, text=label).grid(row=row, column=0, sticky=tk.W, pady=4)
-        tk.Entry(frm, textvariable=var, width=58).grid(row=row, column=1, sticky=tk.EW, pady=4)
+        tk.Entry(frm, textvariable=var, width=60).grid(row=row, column=1, sticky=tk.EW, pady=4)
         row += 1
 
-    add_row("本地仓库根目录（必填）", var_root)
-    add_row("远程 HTTP(S) 地址（可选）", var_url)
+    add_row("远程仓库 HTTP(S) 地址（必填）", var_url)
+    add_row("克隆分支（可选，回车默认远程默认分支）", var_clone_branch)
     add_row("载荷相对路径（可选）", var_payload)
     add_row("远程名（可选）", var_remote)
-    add_row("分支名（可选）", var_branch)
+    add_row("同步分支（可选，pull/push）", var_branch)
     frm.grid_columnconfigure(1, weight=1)
+
+    tk.Label(
+        frm,
+        text=f"仓库将克隆到: {env_dir / 'repo'}",
+        fg="gray",
+        font=("TkDefaultFont", 8),
+    ).grid(row=row, column=0, columnspan=2, sticky=tk.W, pady=(0, 6))
+    row += 1
 
     ok_flag = False
 
     def on_ok() -> None:
         nonlocal ok_flag
-        raw = var_root.get().strip()
-        if not raw:
-            messagebox.showerror("配置", "请填写本地仓库根目录。")
+        url = var_url.get().strip()
+        if not url:
+            messagebox.showerror("配置", "请填写远程仓库 HTTP(S) 地址。")
             return
-        try:
-            p = Path(raw).expanduser().resolve()
-        except OSError:
-            messagebox.showerror("配置", "路径无效。")
+        if not _is_http_url(url):
+            messagebox.showerror("配置", "地址必须以 http:// 或 https:// 开头。")
             return
-        if not p.is_dir():
-            messagebox.showerror("配置", "该路径不是文件夹。")
-            return
-        if not (p / ".git").exists():
-            if not messagebox.askyesno("配置", "该路径下未发现 .git，是否仍要继续？"):
-                return
-        data: dict[str, str] = {"SHUTTLE_REPO_ROOT": str(p)}
-        u = var_url.get().strip()
-        if u:
-            data["SHUTTLE_REPO_URL"] = u
+
+        data: dict[str, str] = {"SHUTTLE_REPO_URL": url}
+        cb = var_clone_branch.get().strip()
+        if cb:
+            data["SHUTTLE_CLONE_BRANCH"] = cb
         pl = var_payload.get().strip()
         if pl:
             data["SHUTTLE_PAYLOAD_REL"] = pl
@@ -85,13 +91,36 @@ def _show_first_run_config(env_dir: Path) -> bool:
         br = var_branch.get().strip()
         if br:
             data["SHUTTLE_BRANCH"] = br
+
+        lbl = tk.Label(frm, text="正在克隆仓库，请稍候…", fg="blue")
+        lbl.grid(row=row, column=0, columnspan=2, pady=6)
+        root.update_idletasks()
+        try:
+            save_env_dir(
+                env_dir,
+                data,
+                header="# shuttle_tool Windows 本地配置 — 勿提交到 Git 仓库",
+            )
+            try_apply_env_dir(env_dir)
+        except ShuttleEnvError as e:
+            messagebox.showerror("克隆失败", str(e))
+            return
+        finally:
+            try:
+                lbl.destroy()
+            except tk.TclError:
+                pass
+
+        if not os.environ.get("SHUTTLE_REPO_ROOT", "").strip():
+            messagebox.showerror("配置", "克隆完成后仍未设置 SHUTTLE_REPO_ROOT。")
+            return
+
+        data["SHUTTLE_REPO_ROOT"] = os.environ["SHUTTLE_REPO_ROOT"]
         save_env_dir(
             env_dir,
             data,
             header="# shuttle_tool Windows 本地配置 — 勿提交到 Git 仓库",
         )
-        for k, v in data.items():
-            os.environ[k] = v
         ok_flag = True
         root.destroy()
 
@@ -99,7 +128,7 @@ def _show_first_run_config(env_dir: Path) -> bool:
         root.destroy()
 
     btns = tk.Frame(frm)
-    btns.grid(row=row, column=0, columnspan=2, pady=(14, 0))
+    btns.grid(row=row + 1, column=0, columnspan=2, pady=(10, 0))
     tk.Button(btns, text="确定", command=on_ok, width=10).pack(side=tk.LEFT, padx=6)
     tk.Button(btns, text="取消", command=on_cancel, width=10).pack(side=tk.LEFT, padx=6)
 
@@ -108,7 +137,13 @@ def _show_first_run_config(env_dir: Path) -> bool:
 
 
 def _ensure_win_config(env_dir: Path) -> bool:
-    try_apply_env_dir(env_dir)
+    try:
+        try_apply_env_dir(env_dir)
+    except ShuttleEnvError as e:
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showerror("配置", str(e))
+        root.destroy()
     if os.environ.get("SHUTTLE_REPO_ROOT", "").strip():
         return True
     return _show_first_run_config(env_dir)
