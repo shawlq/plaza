@@ -11,7 +11,7 @@ cd video_extract
 python -m venv .venv
 .venv\Scripts\activate
 python -m pip install -r requirements.txt
-python main.py
+python winapp.py
 ```
 
 也可以在 Windows 资源管理器中双击 `run_windows.bat` 安装依赖并启动。依赖清单见 `requirements.txt` 与 `docs/release_notes.md` 中的「Python 依赖」。

@@ -1,9 +1,16 @@
 # Release Notes
 
+## v0.5 桌面端 winapp 2026.05.14
+
+1. 将桌面端入口文件 `main.py` 重命名为 `winapp.py`；启动方式改为 `python winapp.py`（`run_windows.bat` 与 `README.md` 已同步）。
+2. 若应用初始窗口高度大于当前屏幕可用高度，则将窗口高度缩小 20%（并限制不超过可用区域），避免首屏超出屏幕。
+3. 移除「ROI选择」矩形拖拽按钮；保留「ROIpoly」按钮及其在画布上依次点击 4 点、凸四边形校验与 ROI 更新逻辑不变。
+4. 点击「截屏」时：先从视频按当前帧索引重新解码该帧（与画布显示分辨率一致），再对 ROI 做透视矫正；矫正使用 `INTER_LANCZOS4` 插值以减轻重采样模糊，并以 PNG 无损写入，从而在像素尺度上尽量贴近原视频画质。
+
 ## v0.4 webapp支持导出 2026.05.13
 
 1. 在在线视频下拉框中选中某条时已请求并展示其标注 JSON（未点「加载视频」时仍会预拉取记录列表）；点击「加载视频」时并行获取视频信息与 JSON，一并同步到画布与输出目录。
-2. 新增「导出图片」按钮：先将会话固化保存为 `{视频名无后缀}.json`，再按该文件中每条记录的 `frame_id`、`roi_points` 与 `output_dir`，用 OpenCV 从原视频读取对应帧，对 ROI 做与桌面端 `main.py` 相同的透视矫正（`INTER_LINEAR`、`getPerspectiveTransform` 与输出尺寸推导一致），以 PNG 无损写入各条目的 `output_dir`，文件名为 `{视频名无后缀}_{frame_id}.png`。
+2. 新增「导出图片」按钮：先将会话固化保存为 `{视频名无后缀}.json`，再按该文件中每条记录的 `frame_id`、`roi_points` 与 `output_dir`，用 OpenCV 从原视频读取对应帧，对 ROI 做与桌面端 `winapp.py` 默认透视矫正相同的处理（`INTER_LINEAR`、`getPerspectiveTransform` 与输出尺寸推导一致），以 PNG 无损写入各条目的 `output_dir`，文件名为 `{视频名无后缀}_{frame_id}.png`。
 
 ## v0.3， webapp， 2026.05.13
 

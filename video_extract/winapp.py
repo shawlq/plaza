@@ -1,7 +1,7 @@
 """Windows-friendly video ROI screenshot tool.
 
 Run with:
-    python main.py
+    python winapp.py
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ import numpy as np
 from PySide6.QtCore import QPointF, QRect, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QAction,
+    QGuiApplication,
     QImage,
     QKeySequence,
     QPainter,
@@ -286,6 +287,12 @@ class VideoExtractWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Video Extract - ROI 截图工具")
         self.resize(1200, 800)
+        screen = QGuiApplication.primaryScreen()
+        if screen is not None:
+            available_h = screen.availableGeometry().height()
+            if self.height() > available_h:
+                new_h = int(self.height() * 0.8)
+                self.resize(self.width(), min(new_h, max(1, available_h - 20)))
 
         self.capture: Optional[cv2.VideoCapture] = None
         self.video_path: Optional[Path] = None
@@ -319,7 +326,6 @@ class VideoExtractWindow(QMainWindow):
         self.next_button = QPushButton("下一帧")
         self.speed_2x_button = QPushButton("2×")
         self.speed_4x_button = QPushButton("4×")
-        self.roi_button = QPushButton("ROI选择")
         self.roi_poly_button = QPushButton("ROIpoly")
         self.capture_button = QPushButton("截屏")
         self.roi_info_label = QLabel("ROI: 未加载视频")
@@ -354,7 +360,6 @@ class VideoExtractWindow(QMainWindow):
             self.next_button,
             self.speed_2x_button,
             self.speed_4x_button,
-            self.roi_button,
             self.roi_poly_button,
             self.capture_button,
         ):
@@ -377,7 +382,6 @@ class VideoExtractWindow(QMainWindow):
         speed_group.addButton(self.speed_2x_button)
         speed_group.addButton(self.speed_4x_button)
 
-        self.roi_button.setCheckable(True)
         self.roi_poly_button.setCheckable(True)
 
         toolbar = QToolBar("快捷键")
@@ -397,7 +401,6 @@ class VideoExtractWindow(QMainWindow):
         self.next_button.clicked.connect(self.next_frame)
         self.speed_2x_button.clicked.connect(lambda: self._set_speed(2.0))
         self.speed_4x_button.clicked.connect(lambda: self._set_speed(4.0))
-        self.roi_button.toggled.connect(self._set_rect_roi_selection)
         self.roi_poly_button.toggled.connect(self._set_poly_roi_selection)
         self.capture_button.clicked.connect(self.save_screenshot)
         self.output_dir_button.clicked.connect(self.choose_output_dir)
@@ -499,7 +502,7 @@ class VideoExtractWindow(QMainWindow):
             self.output_dir_edit.setText(directory)
 
     def save_screenshot(self) -> None:
-        if self.current_frame is None:
+        if self.capture is None or self.current_frame is None:
             return
         output_dir_text = self.output_dir_edit.text().strip()
         if not output_dir_text:
@@ -513,9 +516,17 @@ class VideoExtractWindow(QMainWindow):
             QMessageBox.critical(self, "保存失败", f"无法创建保存目录:\n{output_dir}\n\n{exc}")
             return
 
+        if not self._read_frame(self.current_frame_index):
+            QMessageBox.warning(self, "保存失败", "无法从视频重新读取当前帧。")
+            return
+
         frame_height, frame_width = self.current_frame.shape[:2]
         roi_points = self._clamped_roi_points(frame_width, frame_height)
-        crop = warp_roi_to_rectangle(self.current_frame, roi_points)
+        crop = warp_roi_to_rectangle(
+            self.current_frame,
+            roi_points,
+            interpolation=cv2.INTER_LANCZOS4,
+        )
         if crop is None or crop.size == 0:
             QMessageBox.warning(self, "保存失败", "ROI 区域为空，无法截屏。")
             return
@@ -587,25 +598,15 @@ class VideoExtractWindow(QMainWindow):
         interval_ms = max(1, int(1000 / max(1.0, self.fps * self.playback_speed)))
         self.play_timer.start(interval_ms)
 
-    def _set_rect_roi_selection(self, enabled: bool) -> None:
-        if enabled:
-            self._pause()
-            self.roi_poly_button.setChecked(False)
-        self.canvas.set_roi_selection_mode("rect" if enabled and self.capture is not None else None)
-        if enabled and self.capture is None:
-            self.roi_button.setChecked(False)
-
     def _set_poly_roi_selection(self, enabled: bool) -> None:
         if enabled:
             self._pause()
-            self.roi_button.setChecked(False)
             self.statusBar().showMessage("请在视频区域依次点击 4 个 ROIpoly 角点。", 5000)
         self.canvas.set_roi_selection_mode("poly" if enabled and self.capture is not None else None)
         if enabled and self.capture is None:
             self.roi_poly_button.setChecked(False)
 
     def _finish_roi_selection(self) -> None:
-        self.roi_button.setChecked(False)
         self.roi_poly_button.setChecked(False)
         self.canvas.set_roi_selection_mode(None)
 
@@ -661,7 +662,6 @@ class VideoExtractWindow(QMainWindow):
             self.next_button,
             self.speed_2x_button,
             self.speed_4x_button,
-            self.roi_button,
             self.roi_poly_button,
             self.capture_button,
             self.progress_slider,
@@ -744,6 +744,7 @@ def is_convex_quad(points: list[tuple[int, int]]) -> bool:
 def warp_roi_to_rectangle(
     frame_bgr: np.ndarray,
     points: list[tuple[int, int]],
+    interpolation: int = cv2.INTER_LINEAR,
 ) -> Optional[np.ndarray]:
     ordered_points = order_quad_points(points)
     if len(ordered_points) != 4 or not is_convex_quad(ordered_points):
@@ -771,7 +772,7 @@ def warp_roi_to_rectangle(
         frame_bgr,
         matrix,
         (output_width, output_height),
-        flags=cv2.INTER_LINEAR,
+        flags=interpolation,
     )
 
 

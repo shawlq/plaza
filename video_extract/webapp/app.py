@@ -92,7 +92,7 @@ def _angle_sorted_points_for_warp(points: list[tuple[int, int]]) -> list[tuple[f
 
 
 def order_quad_points_for_warp(points: list[tuple[int, int]]) -> list[tuple[int, int]]:
-    """Order four ROI points as top-left, top-right, bottom-right, bottom-left (desktop ``main.py``)."""
+    """Order four ROI points as top-left, top-right, bottom-right, bottom-left (desktop ``winapp.py``)."""
 
     if len(points) != 4:
         return []
@@ -133,7 +133,7 @@ def warp_roi_to_rectangle(
     frame_bgr: np.ndarray,
     points: list[tuple[int, int]],
 ) -> Optional[np.ndarray]:
-    """Perspective-rectify ROI quad; geometry and interpolation match desktop ``main.py``."""
+    """Perspective-rectify ROI quad; geometry matches desktop ``winapp.py`` (uses ``INTER_LINEAR``)."""
 
     ordered_points = order_quad_points_for_warp(points)
     if len(ordered_points) != 4 or not is_convex_quad_for_warp(ordered_points):
