@@ -61,7 +61,7 @@ shuttle_tool Linux 安装脚本
 
 安装:
   bash shuttle_tool/linux/install.sh
-  PREFIX=/usr/local sudo -E bash shuttle_tool/linux/install.sh
+  sudo env PREFIX=/usr/local bash shuttle_tool/linux/install.sh
   bash shuttle_tool/linux/install.sh --prefix ~/.local
 
   未指定 PREFIX 时：非 root 默认 $HOME/.local；root 默认 /usr/local。
