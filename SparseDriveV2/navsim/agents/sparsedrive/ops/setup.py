@@ -24,11 +24,17 @@ def make_cuda_ext(
     if torch.cuda.is_available() or os.getenv("FORCE_CUDA", "0") == "1":
         define_macros += [("WITH_CUDA", None)]
         extension = CUDAExtension
-        extra_compile_args["nvcc"] = extra_args + [
+        nvcc_flags = extra_args + [
             "-D__CUDA_NO_HALF_OPERATORS__",
             "-D__CUDA_NO_HALF_CONVERSIONS__",
             "-D__CUDA_NO_HALF2_OPERATORS__",
+            # 系统 CUDA 11.5 + GCC 11 编译 PyTorch 头文件时会触发 std::function 错误
+            "-allow-unsupported-compiler",
         ]
+        ccbin = os.environ.get("CUDAHOSTCXX") or os.environ.get("CXX")
+        if ccbin:
+            nvcc_flags.append(f"-ccbin={ccbin}")
+        extra_compile_args["nvcc"] = nvcc_flags
         sources += sources_cuda
     else:
         print("Compiling {} without CUDA".format(name))
@@ -45,28 +51,22 @@ def make_cuda_ext(
 
 if __name__ == "__main__":
     setup(
-        name="deformable_aggregation_with_depth_ext",
+        name="sparsedrive_ops",
         ext_modules=[
             make_cuda_ext(
                 "deformable_aggregation_with_depth_ext",
                 module=".",
                 sources=[
-                    f"src/deformable_aggregation_with_depth.cpp",
-                    f"src/deformable_aggregation_with_depth_cuda.cu",
+                    "src/deformable_aggregation_with_depth.cpp",
+                    "src/deformable_aggregation_with_depth_cuda.cu",
                 ],
             ),
-        ],
-        cmdclass={"build_ext": BuildExtension},
-    )
-    setup(
-        name="deformable_aggregation_ext",
-        ext_modules=[
             make_cuda_ext(
                 "deformable_aggregation_ext",
                 module=".",
                 sources=[
-                    f"src/deformable_aggregation.cpp",
-                    f"src/deformable_aggregation_cuda.cu",
+                    "src/deformable_aggregation.cpp",
+                    "src/deformable_aggregation_cuda.cu",
                 ],
             ),
         ],

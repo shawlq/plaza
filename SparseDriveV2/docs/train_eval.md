@@ -24,7 +24,25 @@ sh scripts/cache/run_metric_caching_navtest_v2.sh
 ```
 
 # Anchor preparation
-You can download path/velocity/trajectory anchor files from [here](https://huggingface.co/wenchaosun/SparseDriveV2) and put to ckpt/kmeans/ or cluster by
+```python
+    path_anchor: str = "ckpt/kmeans/path_1024.npy"
+    velocity_anchor: str = "ckpt/kmeans/velocity_256.npy"
+    trajectory_anchor: str = "ckpt/kmeans/trajectory_1024_256.npz"
+```
+You can download path && velocity && trajectory anchor files from [here](https://huggingface.co/wenchaosun/SparseDriveV2) and put to ckpt/kmeans/
+
+```bash
+mkdir -p ckpt/kmeans
+cd ckpt/kmeans
+
+# 需要 huggingface-cli 或 wget/curl
+huggingface-cli download wenchaosun/SparseDriveV2 \
+  path_1024.npy velocity_256.npy trajectory_1024_256.npz \
+  --local-dir .
+```
+
+or cluster by
+
 ```bash
 mkdir -p ckpt/kmeans
 sh scripts/cluster/cluster_anchor.py

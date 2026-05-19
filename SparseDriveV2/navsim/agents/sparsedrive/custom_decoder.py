@@ -1,3 +1,5 @@
+import re
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -14,6 +16,25 @@ from .scorer.get_pdm_score_v2 import get_pdm_score_para as get_pdm_score_v2
 def _get_clones(module, N):
     # FIXME: copy.deepcopy() is not defined on nn.module
     return nn.ModuleList([copy.deepcopy(module) for i in range(N)])
+
+
+def _metric_cache_path_from_token_path(token_path: str, dataset_version: str) -> str:
+    """Map dataset feature cache dir to PDM metric cache file (log/unknown/token/metric_cache.pkl)."""
+    match = re.search(r"data_cache_(\w+)", token_path)
+    if match:
+        split_name = match.group(1)
+        metric_root = token_path.replace(
+            f"data_cache_{split_name}",
+            f"metric_cache_{split_name}{dataset_version}",
+        )
+    else:
+        metric_root = token_path.replace(
+            "data_cache_navtrain",
+            f"metric_cache_navtrain{dataset_version}",
+        )
+    parts = metric_root.split("/")
+    parts.insert(-1, "unknown")
+    return "/".join(parts) + "/metric_cache.pkl"
 
 class CustomTransformerDecoder(nn.Module):
     def __init__(self, num_poses, d_model, d_ffn, config):
@@ -269,13 +290,10 @@ class CustomTransformerDecoderLayer(nn.Module):
 
                 ## metric
                 trajectory = filter_traj_vocab.flatten(1,2)
-                pdm_token_paths = []
-                for token_path in targets["token_path"]:
-                    pdm_token_path = token_path.replace("data_cache_navtrain", f"metric_cache_navtrain{self._config.dataset_version}")
-                    pdm_token_path_parts = pdm_token_path.split('/')
-                    pdm_token_path_parts.insert(-1, 'unknown')
-                    pdm_token_path = '/'.join(pdm_token_path_parts) + "/metric_cache.pkl"
-                    pdm_token_paths.append(pdm_token_path)
+                pdm_token_paths = [
+                    _metric_cache_path_from_token_path(token_path, self._config.dataset_version)
+                    for token_path in targets["token_path"]
+                ]
                 if self._config.dataset_version == "v1":
                     sub_scores = get_pdm_score_v1(trajectory, pdm_token_paths)
                 elif self._config.dataset_version == "v2":
