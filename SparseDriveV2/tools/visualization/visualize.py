@@ -62,6 +62,43 @@ _CONFIG_ROOT = _REPO_ROOT / "navsim/planning/script/config"
 _AGENT_CONFIG = _CONFIG_ROOT / "common/agent/sparsedrive_agent.yaml"
 _SCENE_FILTER_DIR = _CONFIG_ROOT / "common/train_test_split/scene_filter"
 
+# Must match scripts/mini/03_train.sh and 04_eval.sh (navsim v1)
+NAVSIM_V1_METRICS: List[str] = [
+    "no_at_fault_collisions",
+    "drivable_area_compliance",
+    "driving_direction_compliance",
+    "time_to_collision_within_bound",
+    "comfort",
+    "ego_progress",
+]
+NAVSIM_V1_VELOCITY_FILTER_NUM: List[int] = [64, 20]
+
+
+def _infer_metrics_from_state_dict(state_dict: Dict[str, torch.Tensor]) -> Optional[List[str]]:
+    """Read metric head names from a Lightning checkpoint (order-stable)."""
+    metrics: List[str] = []
+    seen = set()
+    for key in state_dict:
+        if "metric_heads." not in key or not key.endswith(".0.weight"):
+            continue
+        # e.g. ...metric_heads.comfort.0.weight
+        metric = key.split("metric_heads.", 1)[1].split(".", 1)[0]
+        if metric not in seen:
+            seen.add(metric)
+            metrics.append(metric)
+    return metrics or None
+
+
+def _apply_agent_training_config(agent_cfg: OmegaConf, dataset_version: str, metrics: Optional[List[str]]) -> None:
+    """Align SparseDriveConfig with training / checkpoint (metric heads differ v1 vs v2)."""
+    OmegaConf.update(agent_cfg, "config.dataset_version", dataset_version)
+    if metrics is not None:
+        OmegaConf.update(agent_cfg, "config.metrics", metrics)
+    elif dataset_version == "v1":
+        OmegaConf.update(agent_cfg, "config.metrics", list(NAVSIM_V1_METRICS))
+        OmegaConf.update(agent_cfg, "config.velocity_filter_num", list(NAVSIM_V1_VELOCITY_FILTER_NUM))
+    # v2: keep defaults from sparsedrive_config.py
+
 
 def _load_scene_filter(split_name: str, max_scenes: Optional[int], tokens: Optional[List[str]]) -> SceneFilter:
     filter_path = _SCENE_FILTER_DIR / f"{split_name}.yaml"
@@ -101,14 +138,50 @@ def _build_scene_loader(split: str, scene_filter: SceneFilter) -> SceneLoader:
     )
 
 
-def _load_agent(checkpoint: str, dataset_version: str) -> AbstractAgent:
+def _load_agent(
+    checkpoint: str,
+    dataset_version: str,
+    metrics: Optional[List[str]] = None,
+) -> AbstractAgent:
     if not _AGENT_CONFIG.is_file():
         raise FileNotFoundError(f"Agent config missing: {_AGENT_CONFIG}")
+
+    map_location = "cuda" if torch.cuda.is_available() else "cpu"
+    ckpt = torch.load(checkpoint, map_location=map_location)
+    raw_state = ckpt["state_dict"]
+    state_dict = {k.replace("agent.", ""): v for k, v in raw_state.items()}
+
+    inferred_metrics = _infer_metrics_from_state_dict(state_dict)
+    if metrics is None:
+        metrics = inferred_metrics
+    if metrics is None and dataset_version == "v1":
+        metrics = list(NAVSIM_V1_METRICS)
+
     agent_cfg = OmegaConf.load(_AGENT_CONFIG)
     agent_cfg.checkpoint_path = checkpoint
-    OmegaConf.update(agent_cfg, "config.dataset_version", dataset_version)
+    _apply_agent_training_config(agent_cfg, dataset_version, metrics)
+
+    if metrics is not None and inferred_metrics and list(metrics) != inferred_metrics:
+        logger.warning(
+            "Requested metrics %s differ from checkpoint %s; using checkpoint.",
+            metrics,
+            inferred_metrics,
+        )
+        _apply_agent_training_config(agent_cfg, dataset_version, inferred_metrics)
+
+    logger.info(
+        "Agent config: dataset_version=%s metrics=%s",
+        agent_cfg.config.dataset_version,
+        list(agent_cfg.config.metrics),
+    )
+
     agent: AbstractAgent = instantiate(agent_cfg)
-    agent.initialize()
+    missing, unexpected = agent.load_state_dict(state_dict, strict=False)
+    if missing:
+        logger.warning("Checkpoint missing %d keys (showing up to 5): %s", len(missing), missing[:5])
+    if unexpected:
+        logger.warning("Checkpoint unexpected %d keys (showing up to 5): %s", len(unexpected), unexpected[:5])
+
     if torch.cuda.is_available():
         agent = agent.cuda()
     agent.eval()
@@ -162,6 +235,12 @@ def parse_args() -> argparse.Namespace:
         choices=("v1", "v2"),
         help="SparseDriveConfig dataset_version when using --checkpoint",
     )
+    parser.add_argument(
+        "--metrics",
+        nargs="+",
+        default=None,
+        help="Override metric heads (default: infer from checkpoint, else navsim v1 list)",
+    )
     parser.add_argument("--draw-pred", action="store_true", default=True, help="Draw prediction BEV panel")
     parser.add_argument("--no-draw-pred", action="store_false", dest="draw_pred")
     parser.add_argument(
@@ -173,6 +252,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--out-dir", default="vis", help="Output directory for frames and video")
     parser.add_argument("--fps", type=int, default=12, help="Output video FPS")
     parser.add_argument("--downsample", type=int, default=4, help="Spatial downsample for video")
+    parser.add_argument(
+        "--cache-path",
+        default=None,
+        help="Dataset feature cache (default: $DATA_CACHE_NAVMINI). Required for --checkpoint.",
+    )
     parser.add_argument("--no-video", action="store_true", help="Only save JPG frames, skip MP4")
     parser.add_argument(
         "--gif",
@@ -199,10 +283,24 @@ def main() -> None:
     end = args.end if args.end is not None else len(tokens)
     token_slice = tokens[args.start : end : args.interval]
 
+    cache_path: Optional[Path] = None
+    if args.checkpoint:
+        cache_path_str = args.cache_path or os.environ.get("DATA_CACHE_NAVMINI")
+        if not cache_path_str:
+            logger.error(
+                "Feature cache required for checkpoint inference. "
+                "Run scripts/mini/02_prepare_cache.sh or pass --cache-path."
+            )
+            sys.exit(1)
+        cache_path = Path(cache_path_str)
+        if not cache_path.is_dir():
+            logger.error("Cache path does not exist: %s", cache_path)
+            sys.exit(1)
+
     agent: Optional[AbstractAgent] = None
     if args.checkpoint:
         logger.info("Loading agent from %s", args.checkpoint)
-        agent = _load_agent(args.checkpoint, args.dataset_version)
+        agent = _load_agent(args.checkpoint, args.dataset_version, metrics=args.metrics)
 
     predictions: Dict[str, Trajectory] = {}
     if args.predictions_pkl:
@@ -222,7 +320,7 @@ def main() -> None:
         if token in predictions:
             agent_traj = predictions[token]
         elif agent is not None:
-            agent_traj = compute_agent_trajectory(agent, scene)
+            agent_traj = compute_agent_trajectory(agent, scene, cache_path=cache_path)
 
         indices = frame_indices_for_scene(scene, args.frame_mode)
         for frame_idx in indices:

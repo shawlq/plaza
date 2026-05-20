@@ -4,14 +4,20 @@ from __future__ import annotations
 
 import io
 from pathlib import Path
-from typing import List, Optional
+import logging
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 import cv2
 import matplotlib.pyplot as plt
 import numpy as np
+import torch
 
 from navsim.agents.abstract_agent import AbstractAgent
 from navsim.common.dataclasses import Scene, Trajectory
+from navsim.planning.training.dataset import load_feature_target_from_pickle
+
+logger = logging.getLogger(__name__)
 from navsim.visualization.bev import (
     add_annotations_to_bev_ax,
     add_configured_bev_on_ax,
@@ -141,10 +147,90 @@ def frame_indices_for_scene(scene: Scene, frame_mode: str) -> List[int]:
     raise ValueError(f"Unknown frame_mode={frame_mode!r}, use current|history|all")
 
 
-def compute_agent_trajectory(agent: AbstractAgent, scene: Scene) -> Trajectory:
-    """Run SparseDrive (or other) agent at the evaluation frame."""
-    agent_input = scene.get_agent_input()
-    return agent.compute_trajectory(agent_input)
+def _batch_features(features: Dict[str, Any]) -> Dict[str, Any]:
+    """Add batch dimension for single-scene inference (matches eval DataLoader)."""
+    batched: Dict[str, Any] = {}
+    for key, value in features.items():
+        if key == "camera_feature" and isinstance(value, dict):
+            cam_batched: Dict[str, Any] = {}
+            for cam_key, cam_val in value.items():
+                if isinstance(cam_val, torch.Tensor):
+                    cam_batched[cam_key] = cam_val.unsqueeze(0)
+                elif isinstance(cam_val, np.ndarray):
+                    cam_batched[cam_key] = np.expand_dims(cam_val, axis=0)
+                else:
+                    cam_batched[cam_key] = cam_val
+            batched[key] = cam_batched
+        elif isinstance(value, torch.Tensor):
+            batched[key] = value.unsqueeze(0)
+        else:
+            batched[key] = value
+    return batched
+
+
+def _features_to_device(features: Dict[str, Any], device: torch.device) -> Dict[str, Any]:
+    """Move tensors to device; keep image_wh as float tensor (not numpy on CPU)."""
+    out: Dict[str, Any] = {}
+    for key, value in features.items():
+        if key == "camera_feature" and isinstance(value, dict):
+            cam_out: Dict[str, Any] = {}
+            for cam_key, cam_val in value.items():
+                if cam_key == "image_wh":
+                    if isinstance(cam_val, np.ndarray):
+                        cam_out[cam_key] = torch.tensor(cam_val, dtype=torch.float32, device=device)
+                    else:
+                        cam_out[cam_key] = cam_val.to(device=device, dtype=torch.float32)
+                elif isinstance(cam_val, torch.Tensor):
+                    cam_out[cam_key] = cam_val.to(device)
+                else:
+                    cam_out[cam_key] = cam_val
+            out[key] = cam_out
+        elif isinstance(value, torch.Tensor):
+            out[key] = value.to(device)
+        else:
+            out[key] = value
+    return out
+
+
+def compute_agent_trajectory(
+    agent: AbstractAgent,
+    scene: Scene,
+    cache_path: Optional[Path] = None,
+) -> Trajectory:
+    """
+    Run SparseDrive inference (same path as eval: cache + feature pipeline + forward).
+    """
+    token = scene.scene_metadata.initial_token
+    log_name = scene.scene_metadata.log_name
+    builders = agent.get_feature_builders()
+    if not builders:
+        raise RuntimeError("Agent has no feature builders; cannot run inference.")
+    builder = builders[0]
+
+    features: Optional[Dict[str, Any]] = None
+    if cache_path is not None:
+        feature_file = cache_path / log_name / token / f"{builder.get_unique_name()}.gz"
+        if feature_file.is_file():
+            features = load_feature_target_from_pickle(feature_file)
+        else:
+            logger.warning("Feature cache miss: %s", feature_file)
+
+    if features is None:
+        features = builder.compute_features(scene.get_agent_input())
+
+    if hasattr(builder, "pipeline"):
+        features, _, _ = builder.pipeline(features, {}, token, test_mode=True)
+
+    features = _batch_features(features)
+    device = next(agent.parameters()).device
+    features = _features_to_device(features, device)
+
+    agent.eval()
+    with torch.no_grad():
+        predictions, _ = agent.forward(features, None)
+        poses = predictions["trajectory"].squeeze(0).detach().cpu().numpy()
+
+    return Trajectory(poses, agent._trajectory_sampling)
 
 
 def add_frame_label(image: np.ndarray, text: str) -> np.ndarray:

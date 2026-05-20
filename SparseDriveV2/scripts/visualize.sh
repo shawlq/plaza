@@ -28,6 +28,7 @@ OUT_DIR="${OUT_DIR:-vis/sparsedrive_${SCENE_FILTER}}"
 CHECKPOINT="${CHECKPOINT:-}"
 PREDICTIONS_PKL="${PREDICTIONS_PKL:-}"
 DATASET_VERSION="${DATASET_VERSION:-v1}"
+CACHE_PATH="${CACHE_PATH:-${DATA_CACHE_NAVMINI:-}}"
 
 EXTRA_ARGS=("$@")
 CMD=(
@@ -42,6 +43,9 @@ CMD=(
 
 if [[ -n "${CHECKPOINT}" ]]; then
     CMD+=(--checkpoint "${CHECKPOINT}")
+    if [[ -n "${CACHE_PATH}" ]]; then
+        CMD+=(--cache-path "${CACHE_PATH}")
+    fi
 fi
 if [[ -n "${PREDICTIONS_PKL}" ]]; then
     CMD+=(--predictions-pkl "${PREDICTIONS_PKL}")
