@@ -40,6 +40,9 @@ motion_name_mapping = {
     'barrier': 'barrier',
 }
 
+# motion 官方指标只评 car / pedestrian
+MOTION_EVAL_CLASSES = frozenset({'car', 'pedestrian'})
+
 
 class MotionBox(DetectionBox):
     """ Data class used during detection evaluation. Can be a prediction or ground truth."""
@@ -138,14 +141,21 @@ def load_prediction(result_path: str, max_boxes_per_sample: int, box_cls, verbos
     assert 'results' in data, 'Error: No field `results` in result file. Please note that the result format changed.' \
                               'See https://www.nuscenes.org/object-detection for more information.'
 
-    # motion name mapping
-    for key in data['results'].keys():
-        for i in range(len(data['results'][key])):
-            cls_name = data['results'][key][i]['detection_name']
+    # motion name mapping + drop invalid / non-motion classes
+    for key in list(data['results'].keys()):
+        kept = []
+        for ann in data['results'][key]:
+            cls_name = ann.get('detection_name')
+            if cls_name is None:
+                continue
             if cls_name in motion_name_mapping:
                 cls_name = motion_name_mapping[cls_name]
-            data['results'][key][i]['detection_name'] = cls_name
-    
+            if cls_name not in MOTION_EVAL_CLASSES:
+                continue
+            ann['detection_name'] = cls_name
+            kept.append(ann)
+        data['results'][key] = kept
+
     # Deserialize results and get meta data.
     all_results = EvalBoxes.deserialize(data['results'], box_cls)
     meta = data['meta']

@@ -1,6 +1,6 @@
 # ================ base config ===================
 version = 'mini'
-version = 'trainval'
+# version = 'trainval'
 length = {'trainval': 28130, 'mini': 323}
 
 plugin = True
@@ -624,13 +624,14 @@ input_modality = dict(
     use_external=False,
 )
 
+nuscenes_dataset_version = "v1.0-mini" if version == "mini" else "v1.0-trainval"
 data_basic_config = dict(
     type=dataset_type,
     data_root=data_root,
     classes=class_names,
     map_classes=map_class_names,
     modality=input_modality,
-    version="v1.0-trainval",
+    version=nuscenes_dataset_version,
 )
 eval_config = dict(
     **data_basic_config,

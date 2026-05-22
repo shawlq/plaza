@@ -513,10 +513,19 @@ class NuScenes3DDataset(Dataset):
         }
 
         mmcv.mkdir_or_exist(jsonfile_prefix)
-        res_path = osp.join(jsonfile_prefix, "results_nusc.json")
+        res_name = (
+            "results_nusc_tracking.json" if tracking else "results_nusc.json"
+        )
+        res_path = osp.join(jsonfile_prefix, res_name)
         print("Results writes to", res_path)
         mmcv.dump(nusc_submissions, res_path)
         return res_path
+
+    @staticmethod
+    def _count_nusc_submission_boxes(result_path):
+        """Count boxes in a nuScenes detection/tracking submission json."""
+        data = mmcv.load(result_path)
+        return sum(len(v) for v in data.get("results", {}).values())
 
     def _evaluate_single(
         self, result_path, logger=None, result_name="img_bbox", tracking=False
@@ -677,8 +686,14 @@ class NuScenes3DDataset(Dataset):
         return out_path
 
     def format_motion_results(self, results, jsonfile_prefix=None, tracking=False, thresh=None):
+        from .evaluation.motion.motion_utils import (
+            motion_name_mapping,
+            MOTION_EVAL_CLASSES,
+        )
+
         nusc_annos = {}
         mapped_class_names = self.CLASSES
+        num_classes = len(mapped_class_names)
 
         print("Start to convert detection format...")
         for sample_id, det in enumerate(mmcv.track_iter_progress(results)):
@@ -695,10 +710,18 @@ class NuScenes3DDataset(Dataset):
                 self.det3d_eval_version,
                 filter_with_cls_range=False,
             )
+            trajs_3d = det['img_bbox'].get('trajs_3d')
             for i, box in enumerate(boxes):
                 if thresh is not None and box.score < thresh:
                     continue
-                name = mapped_class_names[box.label]
+                label = int(box.label)
+                if label < 0 or label >= num_classes:
+                    continue
+                name = mapped_class_names[label]
+                if name in motion_name_mapping:
+                    name = motion_name_mapping[name]
+                if name not in MOTION_EVAL_CLASSES:
+                    continue
                 if tracking and name in [
                     "barrier",
                     "traffic_cone",
@@ -749,11 +772,8 @@ class NuScenes3DDataset(Dataset):
                             tracking_id=str(box.token),
                         )
                     )
-                nusc_anno.update(
-                    dict(
-                        trajs=det['img_bbox']['trajs_3d'][i].numpy(),
-                    )
-                )
+                if trajs_3d is not None:
+                    nusc_anno.update(dict(trajs=trajs_3d[i].numpy()))
                 annos.append(nusc_anno)
             nusc_annos[sample_token] = annos
         nusc_submissions = {
@@ -784,6 +804,14 @@ class NuScenes3DDataset(Dataset):
         """
         from nuscenes import NuScenes
         from .evaluation.motion.motion_eval_uniad import NuScenesEval as NuScenesEvalMotion
+
+        n_boxes = sum(len(v) for v in results.get("results", {}).values())
+        if n_boxes == 0:
+            print_log(
+                "Skip motion evaluation: empty motion submission.",
+                logger=logger,
+            )
+            return {}
 
         output_dir = result_path
         nusc = NuScenes(
@@ -846,11 +874,38 @@ class NuScenes3DDataset(Dataset):
 
                 if isinstance(result_files, dict):
                     for name in result_names:
+                        result_path = result_files[name]
+                        if tracking:
+                            n_boxes = self._count_nusc_submission_boxes(
+                                result_path
+                            )
+                            if n_boxes == 0:
+                                print_log(
+                                    "Skip tracking evaluation: no predictions "
+                                    "above "
+                                    f"tracking_threshold "
+                                    f"({self.tracking_threshold}).",
+                                    logger=logger,
+                                )
+                                continue
                         ret_dict = self._evaluate_single(
-                            result_files[name], tracking=tracking
+                            result_path, tracking=tracking
                         )
-                    results_dict.update(ret_dict)
+                        results_dict.update(ret_dict)
                 elif isinstance(result_files, str):
+                    if tracking:
+                        n_boxes = self._count_nusc_submission_boxes(
+                            result_files
+                        )
+                        if n_boxes == 0:
+                            print_log(
+                                "Skip tracking evaluation: no predictions "
+                                "above "
+                                f"tracking_threshold "
+                                f"({self.tracking_threshold}).",
+                                logger=logger,
+                            )
+                            continue
                     ret_dict = self._evaluate_single(
                         result_files, tracking=tracking
                     )
@@ -868,9 +923,23 @@ class NuScenes3DDataset(Dataset):
 
         if eval_mode['with_motion']:
             thresh = eval_mode["motion_threshhold"]
-            result_files = self.format_motion_results(results, jsonfile_prefix=self.work_dir, thresh=thresh)
-            motion_results_dict = self._evaluate_single_motion(result_files, self.work_dir, logger=logger)
-            results_dict.update(motion_results_dict)
+            result_files = self.format_motion_results(
+                results, jsonfile_prefix=self.work_dir, thresh=thresh
+            )
+            n_motion_boxes = sum(
+                len(v) for v in result_files.get("results", {}).values()
+            )
+            if n_motion_boxes == 0:
+                print_log(
+                    "Skip motion evaluation: no car/pedestrian predictions "
+                    f"above threshold ({thresh}).",
+                    logger=logger,
+                )
+            else:
+                motion_results_dict = self._evaluate_single_motion(
+                    result_files, self.work_dir, logger=logger
+                )
+                results_dict.update(motion_results_dict)
         
         if eval_mode['with_planning']:
             from .evaluation.planning.planning_eval import planning_eval

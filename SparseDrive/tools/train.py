@@ -24,8 +24,6 @@ from mmdet.apis import set_random_seed
 from torch import distributed as dist
 from datetime import timedelta
 
-import sys
-sys.path.append("/home/c62664/workdir/gitcode/SparseDrive")
 import cv2
 
 cv2.setNumThreads(8)

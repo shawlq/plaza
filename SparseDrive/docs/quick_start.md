@@ -1,5 +1,7 @@
 # Quick Start
 
+> **nuScenes mini（单卡、一键脚本）**：见 [mini_train.md](mini_train.md)。
+
 ### Set up a new virtual environment
 ```bash
 conda create -n sparsedrive python=3.8 -y
